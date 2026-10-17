@@ -843,8 +843,41 @@ export const BotSimulatorView: React.FC<BotSimulatorViewProps> = ({
         </div>
       </div>
 
-      {/* Right Column: Live Quick Converter, Supported Languages & Creator Wallets */}
+      {/* Right Column: One-Line Bash Curl Installer, Quick Test & Creator Wallets */}
       <div className="lg:col-span-5 space-y-5">
+        {/* One-Click Bash Curl Auto-Installer Box on Main Screen */}
+        <div className="bg-slate-900 border border-emerald-500/40 rounded-2xl p-5 space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
+              <Terminal className="w-4 h-4 text-emerald-400" />
+              <span>دستور نصب اتوماتیک روی سرور (One-Line Bash Curl)</span>
+            </h3>
+            <button
+              type="button"
+              onClick={() =>
+                copyToClipboard(
+                  'bash <(curl -Ls https://raw.githubusercontent.com/samkaren/ArzPulse-Bot/main/install.sh)',
+                  'main-bash-curl'
+                )
+              }
+              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors shrink-0"
+            >
+              {copiedKey === 'main-bash-curl' ? (
+                <Check className="w-3.5 h-3.5" />
+              ) : (
+                <Copy className="w-3.5 h-3.5" />
+              )}
+              <span>{copiedKey === 'main-bash-curl' ? 'کپی شد!' : 'کپی دستور نصب'}</span>
+            </button>
+          </div>
+          <p className="text-xs text-slate-400">
+            با کپی و اجرای این دستور در ترمینال سرور، کل ربات، وب‌پنل و دستور <code className="text-emerald-400 font-mono">sudo arz</code> خودکار نصب می‌شوند:
+          </p>
+          <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 font-mono text-xs text-emerald-400 overflow-x-auto select-all" dir="ltr">
+            bash &lt;(curl -Ls https://raw.githubusercontent.com/samkaren/ArzPulse-Bot/main/install.sh)
+          </div>
+        </div>
+
         {/* Quick Instant Test Panel */}
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
           <div className="flex items-center justify-between">

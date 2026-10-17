@@ -12,7 +12,17 @@ import {
   generateAiogramBotCode,
   generateInstallBashScript,
   generateMultilangReadme,
+  generateOneLineCurlCommands,
 } from './codeGenerators.ts';
+
+test('generateOneLineCurlCommands produces valid bash <(curl -Ls ...) one-liner', () => {
+  const cmds = generateOneLineCurlCommands('samkaren', 'ArzPulse-Bot');
+  assert.equal(
+    cmds.bashSubshell,
+    'bash <(curl -Ls https://raw.githubusercontent.com/samkaren/ArzPulse-Bot/main/install.sh)'
+  );
+  assert.ok(cmds.sudoPipe.includes('curl -fsSL'));
+});
 
 test('normalizeDigits converts Persian and Arabic digits to English numbers', () => {
   assert.equal(normalizeDigits('۱۲۳۴۵'), '12345');

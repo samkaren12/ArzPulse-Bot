@@ -8,11 +8,13 @@ import {
   Download,
   FolderGit2,
   ShieldCheck,
+  Zap,
 } from 'lucide-react';
 import {
   generateAiogramBotCode,
   generateInstallBashScript,
   generateMultilangReadme,
+  generateOneLineCurlCommands,
 } from '../utils/codeGenerators';
 import { RECOMMENDED_REPO_NAMES } from '../utils/currencyEngine';
 
@@ -34,6 +36,10 @@ export const ServerAndDocsView: React.FC<ServerAndDocsViewProps> = ({
   const [activeFile, setActiveFile] = useState<'cli' | 'install' | 'bot' | 'readme'>('cli');
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
+  // Customizable GitHub Username & Repo Name for the bash <(curl -Ls ...) command
+  const [ghUser, setGhUser] = useState<string>('samkaren');
+  const [ghRepo, setGhRepo] = useState<string>('ArzPulse-Bot');
+
   // Interactive 'sudo arz' simulator state
   const [sslHostInput, setSslHostInput] = useState<string>('bot.yourdomain.com');
   const [terminalLogs, setTerminalLogs] = useState<string[]>([
@@ -52,15 +58,31 @@ export const ServerAndDocsView: React.FC<ServerAndDocsViewProps> = ({
     'Select an option [1-7] using the buttons below to test sudo arz:',
   ]);
 
+  const curlCmds = generateOneLineCurlCommands(ghUser, ghRepo);
+  const liveDirectCurl =
+    typeof window !== 'undefined'
+      ? `bash <(curl -Ls ${window.location.origin}/install.sh)`
+      : curlCmds.bashSubshell;
+
   const botCode = generateAiogramBotCode({
     githubUrl,
+    githubUser: ghUser,
+    repoName: ghRepo,
     tonWallet,
     tronWallet,
     adminUsername,
     adminPassword,
   });
-  const installCode = generateInstallBashScript({ githubUrl });
-  const readmeCode = generateMultilangReadme();
+  const installCode = generateInstallBashScript({
+    githubUrl,
+    githubUser: ghUser,
+    repoName: ghRepo,
+    adminUsername,
+    adminPassword,
+    tonWallet,
+    tronWallet,
+  });
+  const readmeCode = generateMultilangReadme(ghUser, ghRepo);
 
   const handleCopy = (content: string, id: string) => {
     navigator.clipboard?.writeText(content);
@@ -141,6 +163,99 @@ export const ServerAndDocsView: React.FC<ServerAndDocsViewProps> = ({
 
   return (
     <div className="space-y-6">
+      {/* ONE-LINE BASH CURL AUTO-INSTALLER CARD */}
+      <div className="bg-slate-900 border border-emerald-500/40 rounded-2xl p-5 space-y-4 shadow-lg">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-xl bg-emerald-600/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shrink-0">
+              <Zap className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-slate-100">
+                نصب اتوماتیک تک‌خطی روی سرور با <code className="font-mono text-emerald-400">bash &lt;(curl -Ls ...)</code>
+              </h2>
+              <p className="text-xs text-slate-400">
+                کافیست دستور زیر را کپی کرده و در ترمینال سرور اوبونتو یا دبیان خود بزنید تا همه چیز خودکار نصب شود
+              </p>
+            </div>
+          </div>
+
+          {/* GitHub Username & Repo Customizer */}
+          <div className="flex items-center gap-2 flex-wrap" dir="ltr">
+            <input
+              type="text"
+              value={ghUser}
+              onChange={(e) => setGhUser(e.target.value)}
+              placeholder="GitHub User"
+              aria-label="GitHub Username"
+              className="w-32 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs font-mono text-slate-200"
+            />
+            <span className="text-slate-500 font-mono">/</span>
+            <input
+              type="text"
+              value={ghRepo}
+              onChange={(e) => setGhRepo(e.target.value)}
+              placeholder="Repo Name"
+              aria-label="GitHub Repository Name"
+              className="w-40 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs font-mono text-emerald-400 font-semibold"
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3" dir="ltr">
+          {/* Primary bash <(curl -Ls ...) command */}
+          <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-emerald-400">
+                1. دستور اصلی نصب خودکار گیت‌هاب (bash curl):
+              </span>
+              <button
+                type="button"
+                onClick={() => handleCopy(curlCmds.bashSubshell, 'curl-main')}
+                className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors"
+              >
+                {copiedId === 'curl-main' ? (
+                  <Check className="w-3.5 h-3.5" />
+                ) : (
+                  <Copy className="w-3.5 h-3.5" />
+                )}
+                <span>{copiedId === 'curl-main' ? 'کپی شد (Copied!)' : 'کپی دستور bash curl'}</span>
+              </button>
+            </div>
+            <code
+              className="block font-mono text-xs text-slate-100 bg-slate-900 p-2.5 rounded-lg border border-slate-800/80 overflow-x-auto select-all"
+              data-testid="bash-curl-command"
+            >
+              {curlCmds.bashSubshell}
+            </code>
+          </div>
+
+          {/* Direct Live Server & Sudo Pipe Fallback */}
+          <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-blue-400">
+                2. دستور مستقیم از همین پنل (Direct Live Curl):
+              </span>
+              <button
+                type="button"
+                onClick={() => handleCopy(liveDirectCurl, 'curl-live')}
+                className="px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors"
+              >
+                {copiedId === 'curl-live' ? (
+                  <Check className="w-3.5 h-3.5" />
+                ) : (
+                  <Copy className="w-3.5 h-3.5" />
+                )}
+                <span>{copiedId === 'curl-live' ? 'کپی شد (Copied!)' : 'کپی دستور مستقیم'}</span>
+              </button>
+            </div>
+            <code className="block font-mono text-xs text-slate-100 bg-slate-900 p-2.5 rounded-lg border border-slate-800/80 overflow-x-auto select-all">
+              {liveDirectCurl}
+            </code>
+          </div>
+        </div>
+      </div>
+
       {/* Recommended GitHub Repository Names Banner */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
         <div className="flex items-center justify-between flex-wrap gap-2">
@@ -150,7 +265,7 @@ export const ServerAndDocsView: React.FC<ServerAndDocsViewProps> = ({
               پیشنهاد نام ریپازیتوری گیت‌هاب (Recommended GitHub Repository Names)
             </h2>
           </div>
-          <span className="text-xs text-slate-400">با یک کلیک نام ریپازیتوری را کپی کنید</span>
+          <span className="text-xs text-slate-400">با کلیک روی هر نام، دستور bash curl بالا با همان نام تنظیم می‌شود</span>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
@@ -163,7 +278,10 @@ export const ServerAndDocsView: React.FC<ServerAndDocsViewProps> = ({
                 <span className="font-mono text-sm font-bold text-emerald-400">{repo.name}</span>
                 <button
                   type="button"
-                  onClick={() => handleCopy(repo.name, `repo-${repo.name}`)}
+                  onClick={() => {
+                    setGhRepo(repo.name);
+                    handleCopy(repo.name, `repo-${repo.name}`);
+                  }}
                   className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 flex items-center gap-1"
                 >
                   {copiedId === `repo-${repo.name}` ? (
@@ -171,7 +289,7 @@ export const ServerAndDocsView: React.FC<ServerAndDocsViewProps> = ({
                   ) : (
                     <Copy className="w-3 h-3" />
                   )}
-                  <span>Copy</span>
+                  <span>Select & Copy</span>
                 </button>
               </div>
               <p className="text-xs text-slate-400 leading-relaxed">{repo.tagline}</p>
@@ -308,7 +426,7 @@ export const ServerAndDocsView: React.FC<ServerAndDocsViewProps> = ({
           <div className="space-y-3" dir="ltr">
             <div className="flex items-center justify-between">
               <span className="text-xs font-mono text-slate-400">
-                File: install.sh (Installs Bot, Web Panel & /usr/local/bin/arz)
+                File: install.sh (Executed automatically via {curlCmds.bashSubshell})
               </span>
               <div className="flex items-center gap-2">
                 <button
@@ -380,7 +498,7 @@ export const ServerAndDocsView: React.FC<ServerAndDocsViewProps> = ({
           <div className="space-y-3" dir="ltr">
             <div className="flex items-center justify-between">
               <span className="text-xs font-mono text-slate-400">
-                File: README.md (6 Languages: FA, EN, ZH, TR, AR, RU + Badges + Mermaid Diagram + Wallets)
+                File: README.md (6 Languages: FA, EN, ZH, TR, AR, RU + bash curl + Mermaid + Wallets)
               </span>
               <div className="flex items-center gap-2">
                 <button

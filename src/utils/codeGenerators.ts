@@ -4,11 +4,25 @@ export interface BotConfigOptions {
   botTokenPlaceholder?: string;
   ownerIdPlaceholder?: string;
   githubUrl?: string;
+  githubUser?: string;
+  repoName?: string;
   tonWallet?: string;
   tronWallet?: string;
   webPanelUrl?: string;
   adminUsername?: string;
   adminPassword?: string;
+}
+
+export function generateOneLineCurlCommands(githubUser = 'samkaren', repoName = 'ArzPulse-Bot') {
+  const cleanUser = githubUser.trim() || 'samkaren';
+  const cleanRepo = repoName.trim() || 'ArzPulse-Bot';
+  const rawUrl = `https://raw.githubusercontent.com/${cleanUser}/${cleanRepo}/main/install.sh`;
+  return {
+    bashSubshell: `bash <(curl -Ls ${rawUrl})`,
+    sudoPipe: `curl -fsSL ${rawUrl} | sudo bash`,
+    wgetCmd: `wget -qO- ${rawUrl} | sudo bash`,
+    rawUrl,
+  };
 }
 
 export function generateAiogramBotCode(opts: BotConfigOptions = {}): string {
@@ -42,8 +56,7 @@ import aiohttp
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from datetime import datetime
-from typing import Dict, Any
+from typing import Dict
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.types import (
@@ -82,7 +95,6 @@ class BotStates(StatesGroup):
     waiting_for_support_msg = State()
     owner_broadcast = State()
 
-# In-memory user language store (Use SQLite/Redis in production)
 user_langs: Dict[int, str] = {}
 
 # ==================== 6-LANGUAGE DICTIONARY ====================
@@ -98,7 +110,6 @@ LANGS: Dict[str, Dict[str, str]] = {
         "btn_miniapp": "🚀 مینی‌اپ فوق حرفه‌ای",
         "btn_owner": "👑 مدیریت مالک (وب‌پنل)",
         "btn_group": "➕ افزودن به گروه یا کانال",
-        "btn_back": "🔙 بازگشت به منوی اصلی",
         "ask_price": "🔍 لطفاً نام ارز یا واحد پول را بفرستید (مثلاً: دلار، ترون، بیت کوین، تون، USD، TRX):",
         "ask_conv_1": "1️⃣ لطفاً نام **واحد پول یا ارز اول** را وارد کنید (مثلاً: دلار یا USD):",
         "ask_conv_2": "2️⃣ حالا نام **واحد پول یا ارز دوم** را وارد کنید (مثلاً: ترون یا TRX):",
@@ -117,7 +128,6 @@ LANGS: Dict[str, Dict[str, str]] = {
         "btn_miniapp": "🚀 Pro Mini App",
         "btn_owner": "👑 Owner Admin Panel",
         "btn_group": "➕ Add to Group / Channel",
-        "btn_back": "🔙 Back to Main Menu",
         "ask_price": "🔍 Send the currency or crypto name/ticker (e.g., USD, TRX, TON, BTC, EUR):",
         "ask_conv_1": "1️⃣ Enter the **First Currency / Crypto** (e.g., USD):",
         "ask_conv_2": "2️⃣ Now enter the **Second Currency / Crypto** (e.g., TRX):",
@@ -136,7 +146,6 @@ LANGS: Dict[str, Dict[str, str]] = {
         "btn_miniapp": "🚀 Открыть Mini App",
         "btn_owner": "👑 Панель Владельца",
         "btn_group": "➕ В группу / канал",
-        "btn_back": "🔙 Главное меню",
         "ask_price": "🔍 Введите название или тикер валюты (USD, TRX, TON, BTC, RUB):",
         "ask_conv_1": "1️⃣ Введите **первую валюту** (например: USD):",
         "ask_conv_2": "2️⃣ Введите **вторую валюту** (например: TRX):",
@@ -155,7 +164,6 @@ LANGS: Dict[str, Dict[str, str]] = {
         "btn_miniapp": "🚀 تطبيق Mini App",
         "btn_owner": "👑 لوحة تحكم المالك",
         "btn_group": "➕ أضف لمجموعة أو قناة",
-        "btn_back": "🔙 القائمة الرئيسية",
         "ask_price": "🔍 أرسل اسم العملة أو الرمز (مثل: دولار، ترون، USD، TRX):",
         "ask_conv_1": "1️⃣ أرسل اسم **العملة الأولى** (مثل: USD):",
         "ask_conv_2": "2️⃣ أرسل اسم **العملة الثانية** (مثل: TRX):",
@@ -174,7 +182,6 @@ LANGS: Dict[str, Dict[str, str]] = {
         "btn_miniapp": "🚀 启动专业版 Mini App",
         "btn_owner": "👑 站长管理后台",
         "btn_group": "➕ 添加到群组或频道",
-        "btn_back": "🔙 返回主菜单",
         "ask_price": "🔍 请输入货币或加密货币代码 (例如: USD, TRX, TON, BTC, CNY):",
         "ask_conv_1": "1️⃣ 请输入**第一种货币** (例如: USD):",
         "ask_conv_2": "2️⃣ 请输入**第二种货币** (例如: TRX):",
@@ -193,7 +200,6 @@ LANGS: Dict[str, Dict[str, str]] = {
         "btn_miniapp": "🚀 Profesyonel Mini App",
         "btn_owner": "👑 Sahip Yönetim Paneli",
         "btn_group": "➕ Gruba / Kanala Ekle",
-        "btn_back": "🔙 Ana Menü",
         "ask_price": "🔍 Lütfen para birimi veya kripto adını girin (USD, TRX, TON, BTC, TRY):",
         "ask_conv_1": "1️⃣ Lütfen **Birinci Para Birimini** girin (Örn: USD):",
         "ask_conv_2": "2️⃣ Şimdi **İkinci Para Birimini** girin (Örn: TRX):",
@@ -213,7 +219,6 @@ def build_colored_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     - primary (Blue)
     - success (Green)
     - danger (Red)
-    Supported via custom button styles / Bot API extensions & aiogram extra fields.
     """
     L = get_lang(user_id)
     rows = [
@@ -243,7 +248,6 @@ def build_colored_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
 
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
 
-# ==================== PNL CHART GENERATOR ====================
 def render_pnl_chart_png(code: str, prices: list[float], change_24h: float) -> bytes:
     fig, ax = plt.subplots(figsize=(7, 3.6), dpi=160)
     fig.patch.set_facecolor("#0f172a")
@@ -268,7 +272,6 @@ def render_pnl_chart_png(code: str, prices: list[float], change_24h: float) -> b
     buf.seek(0)
     return buf.read()
 
-# ==================== HANDLERS ====================
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
@@ -314,12 +317,18 @@ if __name__ == "__main__":
 }
 
 export function generateInstallBashScript(opts: BotConfigOptions = {}): string {
-  const github = opts.githubUrl || DEFAULT_GITHUB_URL;
+  const githubUser = opts.githubUser || 'samkaren';
+  const repoName = opts.repoName || 'ArzPulse-Bot';
+  const adminUser = opts.adminUsername || 'owner_admin';
+  const adminPass = opts.adminPassword || 'ArzPanel@2026#Pro';
+  const ton = opts.tonWallet || TON_WALLET;
+  const tron = opts.tronWallet || TRON_WALLET;
+
   return `#!/usr/bin/env bash
 # ==============================================================================
-# ArzPulse Pro — Automated Server Installer & 'sudo arz' Management CLI
-# Supports: Ubuntu 20.04 / 22.04 / 24.04 & Debian 11 / 12
-# Installs: Python 3 + aiogram Bot, Node.js Web Panel & Mini App, Nginx + Certbot SSL
+# ArzPulse Pro — One-Line Automated Server Installer & 'sudo arz' CLI
+# Run directly on Ubuntu / Debian via:
+#   bash <(curl -Ls https://raw.githubusercontent.com/${githubUser}/${repoName}/main/install.sh)
 # ==============================================================================
 
 set -e
@@ -328,26 +337,80 @@ RED='\\033[0;31m'
 GREEN='\\033[0;32m'
 BLUE='\\033[0;34m'
 YELLOW='\\033[1;33m'
+CYAN='\\033[0;36m'
 NC='\\033[0m'
 
 INSTALL_DIR="/opt/arzpulse"
 CLI_PATH="/usr/local/bin/arz"
+REPO_URL="https://github.com/${githubUser}/${repoName}.git"
 
 if [ "$EUID" -ne 0 ]; then
-  echo -e "\${RED}[ERROR] Please run this installer as root (sudo bash install.sh)\${NC}"
-  exit 1
+  echo -e "\${YELLOW}[INFO] Elevating privileges with sudo...\${NC}"
+  exec sudo bash "$0" "$@"
 fi
 
-echo -e "\${BLUE}================================================================\${NC}"
-echo -e "\${GREEN}   🚀 Installing ArzPulse Pro (Bot + Web Panel + Mini App)      \${NC}"
-echo -e "\${BLUE}================================================================\${NC}"
+clear
+echo -e "\${CYAN}================================================================\${NC}"
+echo -e "\${GREEN}   🚀 ArzPulse Pro — Automatic One-Line Server Installer        \${NC}"
+echo -e "\${CYAN}================================================================\${NC}"
 
+read -rp "1) Enter your Telegram Bot Token (from @BotFather): " INPUT_BOT_TOKEN </dev/tty || true
+read -rp "2) Enter your Telegram Numeric Owner ID (e.g. 123456789): " INPUT_OWNER_ID </dev/tty || true
+read -rp "3) Enter Domain, Subdomain, or Server IP (leave blank for IP auto-detect): " INPUT_HOST </dev/tty || true
+
+BOT_TOKEN="\${INPUT_BOT_TOKEN:-YOUR_TELEGRAM_BOT_TOKEN}"
+OWNER_ID="\${INPUT_OWNER_ID:-123456789}"
+SERVER_IP=$(curl -s https://api.ipify.org || hostname -I | awk '{print $1}')
+TARGET_HOST="\${INPUT_HOST:-\$SERVER_IP}"
+
+echo -e "\\n\${BLUE}[1/5] Updating apt packages & installing Python, Node.js, Nginx, Certbot...\${NC}"
 apt-get update -y
-apt-get install -y python3 python3-venv python3-pip curl git nginx certbot python3-certbot-nginx openssl jq
+apt-get install -y python3 python3-venv python3-pip curl wget git nginx certbot python3-certbot-nginx openssl jq
 
+echo -e "\${BLUE}[2/5] Setting up $INSTALL_DIR and cloning/creating project files...\${NC}"
 mkdir -p "$INSTALL_DIR"
+if git ls-remote "$REPO_URL" &>/dev/null; then
+  git clone "$REPO_URL" "$INSTALL_DIR/repo" 2>/dev/null || true
+  cp -r "$INSTALL_DIR/repo/"* "$INSTALL_DIR/" 2>/dev/null || true
+fi
 
-# Create the 'sudo arz' management utility
+cat << EOF > "$INSTALL_DIR/.env"
+BOT_TOKEN="$BOT_TOKEN"
+OWNER_ID="$OWNER_ID"
+WEB_PANEL_URL="https://$TARGET_HOST"
+ADMIN_USERNAME="${adminUser}"
+ADMIN_PASSWORD="${adminPass}"
+TON_WALLET="${ton}"
+TRON_WALLET="${tron}"
+EOF
+
+echo -e "\${BLUE}[3/5] Creating Python virtual environment & installing aiogram 3.x + matplotlib...\${NC}"
+python3 -m venv "$INSTALL_DIR/venv"
+"$INSTALL_DIR/venv/bin/pip" install --upgrade pip
+"$INSTALL_DIR/venv/bin/pip" install aiogram aiohttp matplotlib python-dotenv
+
+echo -e "\${BLUE}[4/5] Configuring systemd services (arzpulse-bot & arzpulse-web)...\${NC}"
+cat << 'EOF' > /etc/systemd/system/arzpulse-bot.service
+[Unit]
+Description=ArzPulse Pro Telegram Bot (aiogram 3.x)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/arzpulse
+EnvironmentFile=/opt/arzpulse/.env
+ExecStart=/opt/arzpulse/venv/bin/python3 /opt/arzpulse/bot.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable arzpulse-bot.service || true
+
+echo -e "\${BLUE}[5/5] Installing 'sudo arz' Server Management CLI at $CLI_PATH...\${NC}"
 cat << 'EOF' > "$CLI_PATH"
 #!/usr/bin/env bash
 set -e
@@ -400,13 +463,13 @@ issue_ssl() {
 while true; do
   show_menu
   case "$choice" in
-    1) systemctl status arzpulse-bot arzpulse-web --no-pager || true ; read -rp "Press Enter..." ;;
-    2) cd "$INSTALL_DIR" && git pull && systemctl restart arzpulse-bot arzpulse-web ; echo -e "\${GREEN}✅ Updated successfully!\${NC}" ; read -rp "Press Enter..." ;;
-    3) systemctl restart arzpulse-bot arzpulse-web ; echo -e "\${GREEN}✅ Services restarted!\${NC}" ; read -rp "Press Enter..." ;;
-    4) systemctl stop arzpulse-bot arzpulse-web ; echo -e "\${YELLOW}🛑 Services stopped.\${NC}" ; read -rp "Press Enter..." ;;
+    1) systemctl status arzpulse-bot --no-pager || true ; read -rp "Press Enter..." ;;
+    2) cd "$INSTALL_DIR" && git pull && systemctl restart arzpulse-bot ; echo -e "\${GREEN}✅ Updated successfully!\${NC}" ; read -rp "Press Enter..." ;;
+    3) systemctl restart arzpulse-bot ; echo -e "\${GREEN}✅ Services restarted!\${NC}" ; read -rp "Press Enter..." ;;
+    4) systemctl stop arzpulse-bot ; echo -e "\${YELLOW}🛑 Services stopped.\${NC}" ; read -rp "Press Enter..." ;;
     5) issue_ssl ; read -rp "Press Enter..." ;;
     6) cat "$INSTALL_DIR/.env" | grep -E "ADMIN_USERNAME|ADMIN_PASSWORD|WEB_PANEL_URL" ; read -rp "Press Enter..." ;;
-    7) systemctl stop arzpulse-bot arzpulse-web || true ; rm -rf "$INSTALL_DIR" "$CLI_PATH" ; echo -e "\${RED}🗑️ Uninstalled.\${NC}" ; exit 0 ;;
+    7) systemctl stop arzpulse-bot || true ; rm -rf "$INSTALL_DIR" "$CLI_PATH" ; echo -e "\${RED}🗑️ Uninstalled.\${NC}" ; exit 0 ;;
     0) exit 0 ;;
     *) echo -e "\${RED}Invalid option!\${NC}" ; sleep 1 ;;
   esac
@@ -414,11 +477,16 @@ done
 EOF
 
 chmod +x "$CLI_PATH"
-echo -e "\${GREEN}✅ Installation Complete! Run 'sudo arz' anytime to manage your bot, SSL, and web panel.\${NC}"
+echo -e "\\n\${GREEN}================================================================\${NC}"
+echo -e "\${GREEN}✅ ArzPulse Pro Installed Successfully!                         \${NC}"
+echo -e "\${CYAN}👉 Type 'sudo arz' anytime to open the Server Management Menu.  \${NC}"
+echo -e "\${CYAN}👉 Web Admin Username: ${adminUser} | Password: ${adminPass}    \${NC}"
+echo -e "\${GREEN}================================================================\${NC}"
 `;
 }
 
-export function generateMultilangReadme(): string {
+export function generateMultilangReadme(githubUser = 'samkaren', repoName = 'ArzPulse-Bot'): string {
+  const cmds = generateOneLineCurlCommands(githubUser, repoName);
   return `# 🌐 ArzPulse Pro — Multi-Language Telegram Currency & Crypto Bot, Mini App & Web Panel
 
 ![Version](https://img.shields.io/badge/Version-3.5.0--Pro-2563eb?style=for-the-badge)
@@ -426,6 +494,28 @@ export function generateMultilangReadme(): string {
 ![Languages](https://img.shields.io/badge/Languages-FA%20%7C%20EN%20%7C%20RU%20%7C%20AR%20%7C%20ZH%20%7C%20TR-f59e0b?style=for-the-badge)
 ![CLI](https://img.shields.io/badge/CLI-sudo%20arz-ef4444?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-MIT-64748b?style=for-the-badge)
+
+---
+
+## ⚡ نصب اتوماتیک تک‌خطی روی سرور / One-Line Automatic Server Installation (\`bash curl\`)
+
+کافیست دستور زیر را کپی کرده و در ترمینال سرور لینوکس (Ubuntu / Debian) خود وارد کنید تا ربات، وب‌پنل، مینی‌اپ و ابزار \`sudo arz\` به‌صورت کاملاً خودکار نصب شوند:
+
+\`\`\`bash
+${cmds.bashSubshell}
+\`\`\`
+
+یا با استفاده از دستور جایگزین \`curl | sudo bash\`:
+
+\`\`\`bash
+${cmds.sudoPipe}
+\`\`\`
+
+پس از اتمام نصب، در هر زمان با زدن دستور زیر منوی مدیریت سرور باز می‌شود:
+
+\`\`\`bash
+sudo arz
+\`\`\`
 
 ---
 
@@ -458,6 +548,7 @@ graph TD
 
 | قابلیت / Feature | ربات تلگرام (Aiogram) | مینی‌اپ (Mini App) | وب‌پنل مالک (Admin) | اسکریپت سرور (\`sudo arz\`) |
 | :--- | :---: | :---: | :---: | :---: |
+| **نصب خودکار تک‌خطی با \`bash <(curl -Ls ...)\`** | ✅ | ✅ | ✅ | ✅ |
 | **دکمه‌های کیبورد رنگی (\`primary\`, \`success\`, \`danger\`)** | ✅ | ✅ | ✅ | ➖ |
 | **۶ زبان زنده (فارسی، انگلیسی، روسی، عربی، چینی، ترکی)** | ✅ | ✅ | ✅ | ➖ |
 | **قیمت لحظه‌ای + سود/زیان ۲۴ ساعته و عکس نمودار (PnL Chart)** | ✅ | ✅ | ✅ | ➖ |
@@ -471,49 +562,35 @@ graph TD
 
 ## 🇮🇷 فارسی: معرفی و امکانات ربات ArzPulse Pro
 **ArzPulse Pro** یک اکوسیستم کامل شامل ربات تلگرام با دکمه‌های کیبورد رنگی (\`ReplyKeyboardMarkup\` با استایل‌های \`success\`, \`primary\`, \`danger\`)، مینی‌اپ تحت وب فوق حرفه‌ای و پنل مدیریت اختصاصی مالک است.
+- **نصب اتوماتیک:** با اجرای \`${cmds.bashSubshell}\` تمام پیش‌نیازها و سرویس‌ها خودکار نصب می‌شوند.
 - **نرخ لحظه‌ای و نمودار سود و زیان:** با ارسال نام هر ارز یا واحد پول (مثل دلار، ترون، بیت‌کوین، تون، تتر، یورو، روبل، لیر)، قیمت دقیق، درصد سود/زیان و **تصویر گرافیکی نمودار** ارسال می‌شود.
 - **تبدیل هوشمند دو مرحله‌ای:** ابتدا ارز مبدا (مثلاً دلار)، سپس ارز مقصد (مثلاً ترون) و تعداد مورد نظر را می‌گیرد و با دقت بالا تبدیل می‌کند.
-- **نصب تک‌دستوری و مدیریت با \`sudo arz\`:** پس از نصب روی سرور لینوکس، با دستور \`sudo arz\` می‌توانید ربات را آپدیت، ریستارت، حذف یا برای دامنه/ساب‌دامنه/آی‌پی خود گواهی **SSL** دریافت کنید.
+- **مدیریت با \`sudo arz\`:** پس از نصب روی سرور لینوکس، با دستور \`sudo arz\` می‌توانید ربات را آپدیت، ریستارت، حذف یا برای دامنه/ساب‌دامنه/آی‌پی خود گواهی **SSL** دریافت کنید.
 
 ---
 
 ## 🇬🇧 English: Overview & Features
-**ArzPulse Pro** is a full-stack Telegram Currency & Cryptocurrency platform built with **Aiogram 3.x**, featuring colored \`ReplyKeyboardMarkup\` buttons (\`primary\`, \`success\`, \`danger\`), a high-precision **Telegram Mini App**, an **Owner Web Admin Dashboard**, and an automated Linux installer with the \`sudo arz\` CLI manager.
-- **Live Prices & PnL Chart Image:** Query any fiat currency or crypto to get real-time pricing, 24h/7d Profit & Loss, and an auto-generated chart image.
-- **Multi-Step Converter:** Convert any amount between fiat currencies (USD, EUR, IRT, RUB, TRY, CNY, AED) and cryptocurrencies (TRX, TON, BTC, ETH, USDT).
+**ArzPulse Pro** is a full-stack Telegram Currency & Cryptocurrency platform built with **Aiogram 3.x**, featuring colored \`ReplyKeyboardMarkup\` buttons (\`primary\`, \`success\`, \`danger\`), a high-precision **Telegram Mini App**, an **Owner Web Admin Dashboard**, and a one-line automated Linux installer (\`${cmds.bashSubshell}\`) with the \`sudo arz\` CLI manager.
 
 ---
 
 ## 🇨🇳 中文: 项目介绍与功能特性
-**ArzPulse Pro** 是一套完整的 Telegram 汇率与加密货币智能机器人系统，支持彩色键盘按钮 (\`primary\`, \`success\`, \`danger\`)、6种语言切换、实时价格与盈亏走势图生成、精准汇率换算、在线客服系统、专业版 Mini App 以及站长 Web 管理面板。通过 \`sudo arz\` 命令即可一键更新、重启或为域名/IP配置 SSL 证书。
+**ArzPulse Pro** 是一套完整的 Telegram 汇率与加密货币智能机器人系统，支持彩色键盘按钮 (\`primary\`, \`success\`, \`danger\`)、6种语言切换、实时价格与盈亏走势图生成、精准汇率换算、在线客服系统、专业版 Mini App 以及站长 Web 管理面板。通过 \`${cmds.bashSubshell}\` 一键自动安装，使用 \`sudo arz\` 即可管理服务与配置 SSL 证书。
 
 ---
 
 ## 🇹🇷 Türkçe: Genel Bakış ve Özellikler
-**ArzPulse Pro**, renkli klavye butonları (\`ReplyKeyboardMarkup\`), 6 dil desteği, anlık döviz/kripto fiyatları, Kar/Zarar (PnL) grafik görseli, hassas döviz çevirici, canlı destek, Mini App ve Sahip Web Yönetim Paneli içeren eksiksiz bir Telegram bot paketidir. Sunucuda \`sudo arz\` komutu ile SSL kurulumu ve servis yönetimi tek tuşla yapılır.
+**ArzPulse Pro**, renkli klavye butonları (\`ReplyKeyboardMarkup\`), 6 dil desteği, anlık döviz/kripto fiyatları, Kar/Zarar (PnL) grafik görseli, hassas döviz çevirici, canlı destek, Mini App ve Sahip Web Yönetim Paneli içeren eksiksiz bir Telegram bot paketidir. Sunucuda \`${cmds.bashSubshell}\` komutu ile otomatik kurulur ve \`sudo arz\` ile yönetilir.
 
 ---
 
 ## 🇸🇦 العربية: نظرة عامة والمميزات
-**ArzPulse Pro** هو نظام متكامل يجمع بين بوت تيليجرام ذكي بأزرار كيبورد ملونة، وتطبيق مصغر (Mini App) احترافي، ولوحة تحكم ويب للمالك، مع دعم 6 لغات، وعرض الأسعار اللحظية مع صورة شارت الأرباح والخسائر، ومحول عملات دقيق، وإدارة كاملة للسيرفر وشهادة SSL عبر الأمر \`sudo arz\`.
+**ArzPulse Pro** هو نظام متكامل يجمع بين بوت تيليجرام ذكي بأزرار كيبورد ملونة، وتطبيق مصغر (Mini App) احترافي، ولوحة تحكم ويب للمالك، مع دعم 6 لغات، وعرض الأسعار اللحظية مع صورة شارت الأرباح والخسائر، ومحول عملات دقيق، وتثبيت تلقائي بسطر واحد عبر \`${cmds.bashSubshell}\` وإدارة كاملة عبر الأمر \`sudo arz\`.
 
 ---
 
 ## 🇷🇺 Русский: Обзор и возможности
-**ArzPulse Pro** — это профессиональный Telegram-бот на базе **Aiogram 3.x** с цветными кнопками клавиатуры (\`primary\`, \`success\`, \`danger\`), поддержкой 6 языков, графиками прибыли и убытков (PnL), точным конвертером валют, Mini App, веб-панелью владельца и утилитой управления сервером \`sudo arz\` с автоматическим выпуском SSL для доменов и IP.
-
----
-
-## 🚀 نصب سریع روی سرور / One-Line Server Installation
-
-\`\`\`bash
-bash <(curl -Ls https://raw.githubusercontent.com/samkaren/ArzPulse-Bot/main/install.sh)
-\`\`\`
-
-پس از نصب، کافیست در ترمینال سرور دستور زیر را وارد کنید:
-\`\`\`bash
-sudo arz
-\`\`\`
+**ArzPulse Pro** — это профессиональный Telegram-бот на базе **Aiogram 3.x** с цветными кнопками клавиатуры (\`primary\`, \`success\`, \`danger\`), поддержкой 6 языков, графиками прибыли и убытков (PnL), точным конвертером валют, Mini App, веб-панелью владельца и автоматической установкой одной командой \`${cmds.bashSubshell}\` с утилитой \`sudo arz\`.
 
 ---
 
