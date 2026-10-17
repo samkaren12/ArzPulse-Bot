@@ -1,0 +1,6 @@
+{
+  "name": "ArzPulse Pro — Telegram Currency & Crypto Bot, Mini App & Admin Suite",
+  "description": "Multi-language Telegram Currency & Crypto Bot (aiogram 3), Interactive Mini App, Owner Web Admin Panel, and sudo arz Server Management Suite.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
