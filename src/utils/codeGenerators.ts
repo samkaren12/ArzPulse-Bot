@@ -487,6 +487,8 @@ echo -e "\${GREEN}==============================================================
 
 export function generateMultilangReadme(githubUser = 'samkaren', repoName = 'ArzPulse-Bot'): string {
   const cmds = generateOneLineCurlCommands(githubUser, repoName);
+  const fullInstallScript = generateInstallBashScript({ githubUser, repoName });
+
   return `# 🌐 ArzPulse Pro — Multi-Language Telegram Currency & Crypto Bot, Mini App & Web Panel
 
 ![Version](https://img.shields.io/badge/Version-3.5.0--Pro-2563eb?style=for-the-badge)
@@ -497,35 +499,52 @@ export function generateMultilangReadme(githubUser = 'samkaren', repoName = 'Arz
 
 ---
 
-## ⚡ نصب اتوماتیک تک‌خطی روی سرور / One-Line Automatic Server Installation (\`bash curl\`)
+## ⚡ نصب اتوماتیک تک‌خطی و دستور مدیریت سرور / One-Line Auto Install & \`sudo arz\` CLI
 
-کافیست دستور زیر را کپی کرده و در ترمینال سرور لینوکس (Ubuntu / Debian) خود وارد کنید تا ربات، وب‌پنل، مینی‌اپ و ابزار \`sudo arz\` به‌صورت کاملاً خودکار نصب شوند:
+### 1️⃣ نصب خودکار با یک دستور (One-Line Bash Curl Installer):
+کافیست دستور زیر را کپی کرده و در ترمینال سرور لینوکس (Ubuntu / Debian) اجرا کنید:
 
 \`\`\`bash
 ${cmds.bashSubshell}
 \`\`\`
 
-یا با استفاده از دستور جایگزین \`curl | sudo bash\`:
-
+دستور جایگزین (\`curl | sudo bash\`):
 \`\`\`bash
 ${cmds.sudoPipe}
 \`\`\`
 
-پس از اتمام نصب، در هر زمان با زدن دستور زیر منوی مدیریت سرور باز می‌شود:
+### 2️⃣ دستور پنل مدیریت سرور (\`sudo arz\` Server Management Command):
+بلافاصله پس از نصب، در هر زمان کافیست دستور زیر را در ترمینال سرور وارد کنید تا منوی شماره‌گذاری‌شده مدیریت باز شود:
 
 \`\`\`bash
 sudo arz
 \`\`\`
 
+#### 📋 گزینه‌های منوی \`sudo arz\` روی سرور:
+\`\`\`text
+================================================================
+         👑 ArzPulse Pro Server Manager (sudo arz)              
+================================================================
+  1) 📊 Show Service Status & Live Logs (مشاهده وضعیت ربات و وب‌پنل)
+  2) 🔄 Update Bot & Web Panel (آپدیت خودکار اسکریپت و ربات)
+  3) ♻️  Restart Bot & Web Panel Services (ریستارت سرویس‌ها)
+  4) 🛑 Stop Bot & Web Panel Services (توقف کامل سرویس‌ها)
+  5) 🔒 Issue SSL Certificate (دریافت گواهی SSL روی دامنه، ساب‌دامنه یا آی‌پی)
+  6) 🔑 Show / Reset Owner Web Admin Panel Credentials (نمایش نام کاربری و رمز وب‌پنل مالک)
+  7) 🗑️  Uninstall ArzPulse Pro Completely (حذف کامل اسکریپت و ربات)
+  0) 🚪 Exit (خروج)
+================================================================
+\`\`\`
+
 ---
 
 ## 📑 فهرست زبان‌ها / Language Index
-- [🇮🇷 فارسی (Persian)](#-فارسی-معرفی-و-امکانات-ربات-arzpulse-pro)
-- [🇬🇧 English](#-english-overview--features)
-- [🇨🇳 中文 (Chinese)](#-中文-项目介绍与功能特性)
-- [🇹🇷 Türkçe (Turkish)](#-türkçe-genel-bakış-ve-özellikler)
-- [🇸🇦 العربية (Arabic)](#-العربية-نظرة-عامة-والمميزات)
-- [🇷🇺 Русский (Russian)](#-русский-обзор-и-возможности)
+- [🇮🇷 فارسی (Persian)](#-فارسی-معرفی-و-راهنمای-نصب-ربات-arzpulse-pro)
+- [🇬🇧 English](#-english-overview--quick-installation)
+- [🇨🇳 中文 (Chinese)](#-中文-项目介绍与一键安装指南)
+- [🇹🇷 Türkçe (Turkish)](#-türkçe-genel-bakış-ve-otomatik-kurulum)
+- [🇸🇦 العربية (Arabic)](#-العربية-نظرة-عامة-والتثبيت-التلقائي)
+- [🇷🇺 Русский (Russian)](#-русский-обзор-и-автоматическая-установка)
 
 ---
 
@@ -549,6 +568,7 @@ graph TD
 | قابلیت / Feature | ربات تلگرام (Aiogram) | مینی‌اپ (Mini App) | وب‌پنل مالک (Admin) | اسکریپت سرور (\`sudo arz\`) |
 | :--- | :---: | :---: | :---: | :---: |
 | **نصب خودکار تک‌خطی با \`bash <(curl -Ls ...)\`** | ✅ | ✅ | ✅ | ✅ |
+| **مدیریت کامل با دستور \`sudo arz\`** | ✅ | ✅ | ✅ | ✅ |
 | **دکمه‌های کیبورد رنگی (\`primary\`, \`success\`, \`danger\`)** | ✅ | ✅ | ✅ | ➖ |
 | **۶ زبان زنده (فارسی، انگلیسی، روسی، عربی، چینی، ترکی)** | ✅ | ✅ | ✅ | ➖ |
 | **قیمت لحظه‌ای + سود/زیان ۲۴ ساعته و عکس نمودار (PnL Chart)** | ✅ | ✅ | ✅ | ➖ |
@@ -560,37 +580,103 @@ graph TD
 
 ---
 
-## 🇮🇷 فارسی: معرفی و امکانات ربات ArzPulse Pro
+## 🇮🇷 فارسی: معرفی و راهنمای نصب ربات ArzPulse Pro
 **ArzPulse Pro** یک اکوسیستم کامل شامل ربات تلگرام با دکمه‌های کیبورد رنگی (\`ReplyKeyboardMarkup\` با استایل‌های \`success\`, \`primary\`, \`danger\`)، مینی‌اپ تحت وب فوق حرفه‌ای و پنل مدیریت اختصاصی مالک است.
-- **نصب اتوماتیک:** با اجرای \`${cmds.bashSubshell}\` تمام پیش‌نیازها و سرویس‌ها خودکار نصب می‌شوند.
-- **نرخ لحظه‌ای و نمودار سود و زیان:** با ارسال نام هر ارز یا واحد پول (مثل دلار، ترون، بیت‌کوین، تون، تتر، یورو، روبل، لیر)، قیمت دقیق، درصد سود/زیان و **تصویر گرافیکی نمودار** ارسال می‌شود.
-- **تبدیل هوشمند دو مرحله‌ای:** ابتدا ارز مبدا (مثلاً دلار)، سپس ارز مقصد (مثلاً ترون) و تعداد مورد نظر را می‌گیرد و با دقت بالا تبدیل می‌کند.
-- **مدیریت با \`sudo arz\`:** پس از نصب روی سرور لینوکس، با دستور \`sudo arz\` می‌توانید ربات را آپدیت، ریستارت، حذف یا برای دامنه/ساب‌دامنه/آی‌پی خود گواهی **SSL** دریافت کنید.
+
+**نصب خودکار روی سرور لینوکس (کپی کنید):**
+\`\`\`bash
+${cmds.bashSubshell}
+\`\`\`
+
+**اجرای منوی مدیریت و دریافت SSL روی دامنه/ساب‌دامنه/آی‌پی (کپی کنید):**
+\`\`\`bash
+sudo arz
+\`\`\`
 
 ---
 
-## 🇬🇧 English: Overview & Features
-**ArzPulse Pro** is a full-stack Telegram Currency & Cryptocurrency platform built with **Aiogram 3.x**, featuring colored \`ReplyKeyboardMarkup\` buttons (\`primary\`, \`success\`, \`danger\`), a high-precision **Telegram Mini App**, an **Owner Web Admin Dashboard**, and a one-line automated Linux installer (\`${cmds.bashSubshell}\`) with the \`sudo arz\` CLI manager.
+## 🇬🇧 English: Overview & Quick Installation
+**ArzPulse Pro** is a full-stack Telegram Currency & Cryptocurrency platform built with **Aiogram 3.x**, featuring colored \`ReplyKeyboardMarkup\` buttons (\`primary\`, \`success\`, \`danger\`), a high-precision **Telegram Mini App**, an **Owner Web Admin Dashboard**, and an automated Linux installer.
+
+**One-Line Auto Install Command (Copy & Run):**
+\`\`\`bash
+${cmds.bashSubshell}
+\`\`\`
+
+**Server Management & Auto SSL CLI Command (Copy & Run):**
+\`\`\`bash
+sudo arz
+\`\`\`
 
 ---
 
-## 🇨🇳 中文: 项目介绍与功能特性
-**ArzPulse Pro** 是一套完整的 Telegram 汇率与加密货币智能机器人系统，支持彩色键盘按钮 (\`primary\`, \`success\`, \`danger\`)、6种语言切换、实时价格与盈亏走势图生成、精准汇率换算、在线客服系统、专业版 Mini App 以及站长 Web 管理面板。通过 \`${cmds.bashSubshell}\` 一键自动安装，使用 \`sudo arz\` 即可管理服务与配置 SSL 证书。
+## 🇨🇳 中文: 项目介绍与一键安装指南
+**ArzPulse Pro** 是一套完整的 Telegram 汇率与加密货币智能机器人系统，支持彩色键盘按钮 (\`primary\`, \`success\`, \`danger\`)、6种语言切换、实时价格与盈亏走势图生成、精准汇率换算、在线客服系统、专业版 Mini App 以及站长 Web 管理面板。
+
+**一键自动安装脚本 (复制并运行):**
+\`\`\`bash
+${cmds.bashSubshell}
+\`\`\`
+
+**服务器管理与 SSL 证书配置命令 (复制并运行):**
+\`\`\`bash
+sudo arz
+\`\`\`
 
 ---
 
-## 🇹🇷 Türkçe: Genel Bakış ve Özellikler
-**ArzPulse Pro**, renkli klavye butonları (\`ReplyKeyboardMarkup\`), 6 dil desteği, anlık döviz/kripto fiyatları, Kar/Zarar (PnL) grafik görseli, hassas döviz çevirici, canlı destek, Mini App ve Sahip Web Yönetim Paneli içeren eksiksiz bir Telegram bot paketidir. Sunucuda \`${cmds.bashSubshell}\` komutu ile otomatik kurulur ve \`sudo arz\` ile yönetilir.
+## 🇹🇷 Türkçe: Genel Bakış ve Otomatik Kurulum
+**ArzPulse Pro**, renkli klavye butonları (\`ReplyKeyboardMarkup\`), 6 dil desteği, anlık döviz/kripto fiyatları, Kar/Zarar (PnL) grafik görseli, hassas döviz çevirici, canlı destek, Mini App ve Sahip Web Yönetim Paneli içeren eksiksiz bir Telegram bot paketidir.
+
+**Tek Satır Otomatik Kurulum Komutu (Kopyala ve Çalıştır):**
+\`\`\`bash
+${cmds.bashSubshell}
+\`\`\`
+
+**Sunucu Yönetimi ve SSL Kurulum Komutu (Kopyala ve Çalıştır):**
+\`\`\`bash
+sudo arz
+\`\`\`
 
 ---
 
-## 🇸🇦 العربية: نظرة عامة والمميزات
-**ArzPulse Pro** هو نظام متكامل يجمع بين بوت تيليجرام ذكي بأزرار كيبورد ملونة، وتطبيق مصغر (Mini App) احترافي، ولوحة تحكم ويب للمالك، مع دعم 6 لغات، وعرض الأسعار اللحظية مع صورة شارت الأرباح والخسائر، ومحول عملات دقيق، وتثبيت تلقائي بسطر واحد عبر \`${cmds.bashSubshell}\` وإدارة كاملة عبر الأمر \`sudo arz\`.
+## 🇸🇦 العربية: نظرة عامة والتثبيت التلقائي
+**ArzPulse Pro** هو نظام متكامل يجمع بين بوت تيليجرام ذكي بأزرار كيبورد ملونة، وتطبيق مصغر (Mini App) احترافي، ولوحة تحكم ويب للمالك، مع دعم 6 لغات، وعرض الأسعار اللحظية مع صورة شارت الأرباح والخسائر، ومحول عملات دقيق.
+
+**أمر التثبيت التلقائي بسطر واحد (انسخ وشغل):**
+\`\`\`bash
+${cmds.bashSubshell}
+\`\`\`
+
+**أمر إدارة السيرفر وتفعيل شهادة SSL (انسخ وشغل):**
+\`\`\`bash
+sudo arz
+\`\`\`
 
 ---
 
-## 🇷🇺 Русский: Обзор и возможности
-**ArzPulse Pro** — это профессиональный Telegram-бот на базе **Aiogram 3.x** с цветными кнопками клавиатуры (\`primary\`, \`success\`, \`danger\`), поддержкой 6 языков, графиками прибыли и убытков (PnL), точным конвертером валют, Mini App, веб-панелью владельца и автоматической установкой одной командой \`${cmds.bashSubshell}\` с утилитой \`sudo arz\`.
+## 🇷🇺 Русский: Обзор и автоматическая установка
+**ArzPulse Pro** — это профессиональный Telegram-бот на базе **Aiogram 3.x** с цветными кнопками клавиатуры (\`primary\`, \`success\`, \`danger\`), поддержкой 6 языков, графиками прибыли и убытков (PnL), точным конвертером валют, Mini App и веб-панелью владельца.
+
+**Автоматическая установка одной командой (Скопируйте и запустите):**
+\`\`\`bash
+${cmds.bashSubshell}
+\`\`\`
+
+**Панель управления сервером и выпуск SSL (Скопируйте и запустите):**
+\`\`\`bash
+sudo arz
+\`\`\`
+
+---
+
+## 📜 سورس کامل اسکریپت نصب (\`install.sh\` Full Script — Copyable)
+
+اگر می‌خواهید کل فایل اسکریپت \`install.sh\` را مستقیماً از داخل README کپی کنید:
+
+\`\`\`bash
+${fullInstallScript}
+\`\`\`
 
 ---
 
@@ -608,3 +694,4 @@ graph TD
   \`\`\`
 `;
 }
+

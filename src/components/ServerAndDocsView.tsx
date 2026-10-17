@@ -495,10 +495,64 @@ export const ServerAndDocsView: React.FC<ServerAndDocsViewProps> = ({
 
         {/* View 4: README.md */}
         {activeFile === 'readme' && (
-          <div className="space-y-3" dir="ltr">
+          <div className="space-y-4" dir="ltr">
+            {/* Quick Copy Bar inside README view for bash curl, sudo arz, and full install.sh */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 bg-slate-950 p-4 rounded-xl border border-slate-800">
+              <div className="p-3 rounded-lg bg-slate-900 border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-emerald-400">1. One-Line Auto Install</span>
+                  <button
+                    type="button"
+                    onClick={() => handleCopy(curlCmds.bashSubshell, 'readme-curl')}
+                    className="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1"
+                  >
+                    {copiedId === 'readme-curl' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                    <span>{copiedId === 'readme-curl' ? 'Copied!' : 'Copy bash curl'}</span>
+                  </button>
+                </div>
+                <code className="block font-mono text-[11px] text-slate-200 truncate select-all">
+                  {curlCmds.bashSubshell}
+                </code>
+              </div>
+
+              <div className="p-3 rounded-lg bg-slate-900 border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-amber-400">2. Server CLI Command</span>
+                  <button
+                    type="button"
+                    onClick={() => handleCopy('sudo arz', 'readme-sudo-arz')}
+                    className="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold flex items-center gap-1"
+                  >
+                    {copiedId === 'readme-sudo-arz' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                    <span>{copiedId === 'readme-sudo-arz' ? 'Copied!' : 'Copy sudo arz'}</span>
+                  </button>
+                </div>
+                <code className="block font-mono text-[11px] text-slate-200 select-all">
+                  sudo arz
+                </code>
+              </div>
+
+              <div className="p-3 rounded-lg bg-slate-900 border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-blue-400">3. Full Bash Script</span>
+                  <button
+                    type="button"
+                    onClick={() => handleCopy(installCode, 'readme-install-sh')}
+                    className="px-2.5 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold flex items-center gap-1"
+                  >
+                    {copiedId === 'readme-install-sh' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                    <span>{copiedId === 'readme-install-sh' ? 'Copied!' : 'Copy install.sh'}</span>
+                  </button>
+                </div>
+                <code className="block font-mono text-[11px] text-slate-200 truncate">
+                  #!/usr/bin/env bash (Full Auto-Installer + sudo arz)
+                </code>
+              </div>
+            </div>
+
             <div className="flex items-center justify-between">
               <span className="text-xs font-mono text-slate-400">
-                File: README.md (6 Languages: FA, EN, ZH, TR, AR, RU + bash curl + Mermaid + Wallets)
+                File: README.md (Includes bash curl, sudo arz, Full install.sh, 6 Languages, Mermaid Diagram & Wallets)
               </span>
               <div className="flex items-center gap-2">
                 <button
@@ -511,7 +565,7 @@ export const ServerAndDocsView: React.FC<ServerAndDocsViewProps> = ({
                   ) : (
                     <Copy className="w-3.5 h-3.5" />
                   )}
-                  <span>Copy README.md</span>
+                  <span>Copy Full README.md</span>
                 </button>
                 <button
                   type="button"
