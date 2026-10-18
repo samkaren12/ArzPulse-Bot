@@ -9,8 +9,9 @@ import {
   CheckCircle2,
   Send,
   GlobeLock,
+  ExternalLink,
 } from 'lucide-react';
-import { AssetInfo, formatCurrencyValue } from '../utils/currencyEngine';
+import { AssetInfo, formatCurrencyValue, getAssetTomanPrice, ARZDIGITAL_USD_URL } from '../utils/currencyEngine';
 import { SupportTicket } from './BotSimulatorView';
 
 interface AdminPanelViewProps {
@@ -23,9 +24,11 @@ interface AdminPanelViewProps {
   tronWallet: string;
   onUpdateWallets: (ton: string, tron: string) => void;
   assets: AssetInfo[];
-  onUpdateAssetPrice: (code: string, newPriceUsd: number, newChange24h: number) => void;
+  onUpdateAssetPrice: (code: string, newPriceUsd: number, newChange24h: number, newPriceToman?: number) => void;
   tickets: SupportTicket[];
   onReplyTicket: (ticketId: string, replyText: string) => void;
+  onSyncArzDigital?: () => void;
+  isSyncingArzDigital?: boolean;
 }
 
 export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
@@ -41,6 +44,8 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
   onUpdateAssetPrice,
   tickets,
   onReplyTicket,
+  onSyncArzDigital,
+  isSyncingArzDigital = false,
 }) => {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [loginUser, setLoginUser] = useState<string>('');
@@ -75,9 +80,10 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
   });
 
   // Price edit state
-  const [editingCode, setEditingCode] = useState<string>('TRX');
-  const [editPriceVal, setEditPriceVal] = useState<string>('0.2485');
-  const [editPnlVal, setEditPnlVal] = useState<string>('4.82');
+  const [editingCode, setEditingCode] = useState<string>('USD');
+  const [editPriceVal, setEditPriceVal] = useState<string>('1');
+  const [editTomanVal, setEditTomanVal] = useState<string>('262400');
+  const [editPnlVal, setEditPnlVal] = useState<string>('-0.46');
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -132,9 +138,15 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
   const handlePriceUpdateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const p = parseFloat(editPriceVal);
+    const toman = parseFloat(editTomanVal);
     const c = parseFloat(editPnlVal);
     if (!Number.isFinite(p) || p <= 0) return;
-    onUpdateAssetPrice(editingCode, p, Number.isFinite(c) ? c : 0);
+    onUpdateAssetPrice(
+      editingCode,
+      p,
+      Number.isFinite(c) ? c : 0,
+      Number.isFinite(toman) && toman > 0 ? toman : undefined
+    );
     setSavedBanner(`قیمت لحظه‌ای ${editingCode} در ربات و مینی‌اپ به‌روزرسانی شد.`);
     setTimeout(() => setSavedBanner(''), 3000);
   };
@@ -235,7 +247,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
               کنسول مدیریت اختصاصی مالک ربات (Owner Web Admin Panel)
             </h2>
             <p className="text-xs text-slate-400 font-mono">
-              Logged in as: {adminUsername} · SSL: https://{sslStatus.host}
+              Logged in as: {adminUsername} · Feed: ArzDigital.com · SSL: https://{sslStatus.host}
             </p>
           </div>
         </div>
@@ -259,7 +271,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
             }`}
           >
             <RefreshCw className="w-3.5 h-3.5" />
-            <span>مدیریت نرخ ارزها</span>
+            <span>مدیریت نرخ ارزها (ArzDigital)</span>
           </button>
           <button
             type="button"
@@ -368,10 +380,34 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
       {/* Tab 2: Live Market Rates Editor */}
       {activeTab === 'rates' && (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-5">
-          <h3 className="text-base font-bold text-slate-100">
-            به‌روزرسانی دستی یا تنظیم نرخ ارزها و درصد سود/زیان
-          </h3>
-          <form onSubmit={handlePriceUpdateSubmit} className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h3 className="text-base font-bold text-slate-100">
+                مدیریت نرخ ارزها و همگام‌سازی مستقیم با ArzDigital.com
+              </h3>
+              <a
+                href={ARZDIGITAL_USD_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs text-blue-400 hover:underline font-mono inline-flex items-center gap-1 mt-1"
+              >
+                <span>{ARZDIGITAL_USD_URL}</span>
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            </div>
+            {onSyncArzDigital && (
+              <button
+                type="button"
+                onClick={onSyncArzDigital}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-colors flex items-center gap-2 shrink-0"
+              >
+                <RefreshCw className={`w-4 h-4 ${isSyncingArzDigital ? 'animate-spin' : ''}`} />
+                <span>دریافت آنی تمام نرخ‌ها از ArzDigital.com</span>
+              </button>
+            )}
+          </div>
+
+          <form onSubmit={handlePriceUpdateSubmit} className="grid grid-cols-1 sm:grid-cols-5 gap-3 items-end">
             <div>
               <label className="block text-xs text-slate-400 mb-1">انتخاب ارز</label>
               <select
@@ -382,6 +418,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                   const found = assets.find((a) => a.code === code);
                   if (found) {
                     setEditPriceVal(String(found.priceUsd));
+                    setEditTomanVal(String(found.priceToman));
                     setEditPnlVal(String(found.change24h));
                   }
                 }}
@@ -394,6 +431,17 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                   </option>
                 ))}
               </select>
+            </div>
+            <div>
+              <label className="block text-xs text-slate-400 mb-1">نرخ تومانی (IRT)</label>
+              <input
+                type="number"
+                step="any"
+                value={editTomanVal}
+                onChange={(e) => setEditTomanVal(e.target.value)}
+                aria-label="New Price Toman"
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-emerald-400 font-bold"
+              />
             </div>
             <div>
               <label className="block text-xs text-slate-400 mb-1">قیمت به دلار (USD)</label>
@@ -427,15 +475,18 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {assets.map((a) => (
-              <div key={a.code} className="p-3 rounded-xl bg-slate-950 border border-slate-800">
-                <div className="flex items-center justify-between text-xs mb-1">
+              <div key={a.code} className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
+                <div className="flex items-center justify-between text-xs">
                   <span className="font-bold text-slate-200">{a.code}</span>
                   <span className={a.change24h >= 0 ? 'text-emerald-400 font-mono' : 'text-rose-400 font-mono'}>
                     {a.change24h >= 0 ? '+' : ''}
                     {a.change24h}%
                   </span>
                 </div>
-                <div className="font-mono text-sm font-bold text-slate-100 tabular-nums">
+                <div className="font-mono text-sm font-bold text-emerald-400 tabular-nums">
+                  {formatCurrencyValue(getAssetTomanPrice(a, assets))} تومان
+                </div>
+                <div className="font-mono text-xs text-slate-400 tabular-nums">
                   ${formatCurrencyValue(a.priceUsd)}
                 </div>
               </div>

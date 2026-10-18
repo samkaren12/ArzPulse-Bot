@@ -15,6 +15,7 @@ import {
   generateInstallBashScript,
   generateMultilangReadme,
   generateOneLineCurlCommands,
+  generateDirectZero404ServerCommand,
 } from '../utils/codeGenerators';
 import { RECOMMENDED_REPO_NAMES } from '../utils/currencyEngine';
 
@@ -47,22 +48,27 @@ export const ServerAndDocsView: React.FC<ServerAndDocsViewProps> = ({
     '================================================================',
     '         👑 ArzPulse Pro Server Manager (sudo arz)              ',
     '================================================================',
-    '  1) 📊 Show Service Status & Live Logs',
-    '  2) 🔄 Update Bot & Web Panel (Git Pull & Pip/NPM Update)',
-    '  3) ♻️  Restart Bot & Web Panel Services',
-    '  4) 🛑 Stop Bot & Web Panel Services',
+    '  1) 📊 Show Bot & Web Panel Status',
+    '  2) 🔄 Update Bot & Dependencies',
+    '  3) ♻️  Restart Bot & Web Panel',
+    '  4) 🛑 Stop Bot & Web Panel',
     '  5) 🔒 Issue SSL Certificate (Domain / Subdomain / Public IP)',
-    '  6) 🔑 Show / Reset Owner Web Admin Panel Credentials',
+    '  6) 🔑 Change Bot Token / Owner ID / Show Admin Credentials',
     '  7) 🗑️  Uninstall ArzPulse Pro Completely',
     '================================================================',
     'Select an option [1-7] using the buttons below to test sudo arz:',
   ]);
 
   const curlCmds = generateOneLineCurlCommands(ghUser, ghRepo);
-  const liveDirectCurl =
-    typeof window !== 'undefined'
-      ? `bash <(curl -Ls ${window.location.origin}/install.sh)`
-      : curlCmds.bashSubshell;
+  const directZero404Command = generateDirectZero404ServerCommand({
+    githubUrl,
+    githubUser: ghUser,
+    repoName: ghRepo,
+    adminUsername,
+    adminPassword,
+    tonWallet,
+    tronWallet,
+  });
 
   const botCode = generateAiogramBotCode({
     githubUrl,
@@ -107,14 +113,12 @@ export const ServerAndDocsView: React.FC<ServerAndDocsViewProps> = ({
         ...prev,
         `[${ts}] root@vps:~# sudo arz -> Option 1 (Status)`,
         '● arzpulse-bot.service - Aiogram 3.x Telegram Bot (Active: running)',
-        '● arzpulse-web.service - Web Admin & Mini App Server (Active: running on port 3000)',
-        '● nginx.service - Reverse Proxy & TLS 1.3 Termination (Active: running)',
+        '● arzpulse-web.service - Web Admin & Mini App Server (Active: running on port 8080)',
       ]);
     } else if (opt === 2) {
       setTerminalLogs((prev) => [
         ...prev,
         `[${ts}] root@vps:~# sudo arz -> Option 2 (Update Script & Bot)`,
-        'Fetching latest commits from origin/main...',
         'Updating Python requirements (aiogram, aiohttp, matplotlib)...',
         '✅ ArzPulse Pro updated to latest version and services restarted!',
       ]);
@@ -145,7 +149,7 @@ export const ServerAndDocsView: React.FC<ServerAndDocsViewProps> = ({
     } else if (opt === 6) {
       setTerminalLogs((prev) => [
         ...prev,
-        `[${ts}] root@vps:~# sudo arz -> Option 6 (Owner Credentials)`,
+        `[${ts}] root@vps:~# sudo arz -> Option 6 (Owner Credentials & Bot Token)`,
         `ADMIN_USERNAME=${adminUsername}`,
         `ADMIN_PASSWORD=${adminPassword}`,
         `TON_WALLET=${tonWallet}`,
@@ -163,7 +167,7 @@ export const ServerAndDocsView: React.FC<ServerAndDocsViewProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* ONE-LINE BASH CURL AUTO-INSTALLER CARD */}
+      {/* ONE-LINE BASH CURL & ZERO-404 AUTO-INSTALLER CARD */}
       <div className="bg-slate-900 border border-emerald-500/40 rounded-2xl p-5 space-y-4 shadow-lg">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
@@ -172,10 +176,10 @@ export const ServerAndDocsView: React.FC<ServerAndDocsViewProps> = ({
             </div>
             <div>
               <h2 className="text-base font-bold text-slate-100">
-                نصب اتوماتیک تک‌خطی روی سرور با <code className="font-mono text-emerald-400">bash &lt;(curl -Ls ...)</code>
+                نصب اتوماتیک روی سرور (اول توکن ربات و بعد آیدی عددی مالک را می‌پرسد و نصب می‌کند)
               </h2>
               <p className="text-xs text-slate-400">
-                کافیست دستور زیر را کپی کرده و در ترمینال سرور اوبونتو یا دبیان خود بزنید تا همه چیز خودکار نصب شود
+                اگر هنوز ریپازیتوری گیت‌هاب را نساخته‌اید از <strong className="text-emerald-400">روش ۱ (بدون خطای 404)</strong> استفاده کنید؛ و بعد از آپلود در گیت‌هاب از <strong className="text-blue-400">روش ۲ (bash curl)</strong> استفاده نمایید
               </p>
             </div>
           </div>
@@ -203,16 +207,45 @@ export const ServerAndDocsView: React.FC<ServerAndDocsViewProps> = ({
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3" dir="ltr">
-          {/* Primary bash <(curl -Ls ...) command */}
+          {/* Option 1: Guaranteed Zero-404 Direct Server Installer */}
+          <div className="p-3.5 rounded-xl bg-slate-950 border border-emerald-500/40 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-bold text-emerald-400">
+                1. نصب فوری بدون نیاز به گیت‌هاب (تضمینی بدون ارور 404):
+              </span>
+              <button
+                type="button"
+                onClick={() => handleCopy(directZero404Command, 'zero-404-btn')}
+                className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shrink-0"
+              >
+                {copiedId === 'zero-404-btn' ? (
+                  <Check className="w-3.5 h-3.5" />
+                ) : (
+                  <Copy className="w-3.5 h-3.5" />
+                )}
+                <span>
+                  {copiedId === 'zero-404-btn'
+                    ? 'کپی شد! در ترمینال سرور Paste کنید'
+                    : 'کپی دستور نصب مستقیم (بدون 404)'}
+                </span>
+              </button>
+            </div>
+            <div className="font-mono text-[11px] text-slate-300 bg-slate-900 p-2.5 rounded-lg border border-slate-800/80 space-y-0.5">
+              <div className="text-emerald-400"># Asks 1) Bot Token 2) Owner ID, then installs bot.py + sudo arz:</div>
+              <div className="truncate">cat &lt;&lt; &apos;ARZ_INSTALLER_EOF&apos; &gt; /root/install.sh &amp;&amp; sudo bash /root/install.sh</div>
+            </div>
+          </div>
+
+          {/* Option 2: GitHub bash <(curl -Ls ...) command (for README & after pushing to GitHub) */}
           <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-emerald-400">
-                1. دستور اصلی نصب خودکار گیت‌هاب (bash curl):
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-semibold text-blue-400">
+                2. دستور گیت‌هاب (بعد از آپلود install.sh در گیت‌هاب شما):
               </span>
               <button
                 type="button"
                 onClick={() => handleCopy(curlCmds.bashSubshell, 'curl-main')}
-                className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors shrink-0"
               >
                 {copiedId === 'curl-main' ? (
                   <Check className="w-3.5 h-3.5" />
@@ -227,30 +260,6 @@ export const ServerAndDocsView: React.FC<ServerAndDocsViewProps> = ({
               data-testid="bash-curl-command"
             >
               {curlCmds.bashSubshell}
-            </code>
-          </div>
-
-          {/* Direct Live Server & Sudo Pipe Fallback */}
-          <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-blue-400">
-                2. دستور مستقیم از همین پنل (Direct Live Curl):
-              </span>
-              <button
-                type="button"
-                onClick={() => handleCopy(liveDirectCurl, 'curl-live')}
-                className="px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors"
-              >
-                {copiedId === 'curl-live' ? (
-                  <Check className="w-3.5 h-3.5" />
-                ) : (
-                  <Copy className="w-3.5 h-3.5" />
-                )}
-                <span>{copiedId === 'curl-live' ? 'کپی شد (Copied!)' : 'کپی دستور مستقیم'}</span>
-              </button>
-            </div>
-            <code className="block font-mono text-xs text-slate-100 bg-slate-900 p-2.5 rounded-lg border border-slate-800/80 overflow-x-auto select-all">
-              {liveDirectCurl}
             </code>
           </div>
         </div>

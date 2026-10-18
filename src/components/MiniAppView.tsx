@@ -9,6 +9,8 @@ import {
   Search,
   Send,
   Wallet,
+  RefreshCw,
+  ExternalLink,
 } from 'lucide-react';
 import {
   AssetInfo,
@@ -16,6 +18,8 @@ import {
   TRANSLATIONS,
   convertCurrency,
   formatCurrencyValue,
+  getAssetTomanPrice,
+  ARZDIGITAL_USD_URL,
 } from '../utils/currencyEngine';
 import { PnLChartCanvas } from './PnLChartCanvas';
 
@@ -27,6 +31,9 @@ interface MiniAppViewProps {
   tronWallet: string;
   githubUrl: string;
   onAddTicket: (msg: string) => void;
+  onSyncArzDigital?: () => void;
+  isSyncingArzDigital?: boolean;
+  lastArzSyncTime?: string;
 }
 
 export const MiniAppView: React.FC<MiniAppViewProps> = ({
@@ -37,9 +44,12 @@ export const MiniAppView: React.FC<MiniAppViewProps> = ({
   tronWallet,
   githubUrl,
   onAddTicket,
+  onSyncArzDigital,
+  isSyncingArzDigital = false,
+  lastArzSyncTime = 'Live',
 }) => {
   const t = TRANSLATIONS[lang];
-  const [selectedAssetCode, setSelectedAssetCode] = useState<string>('TRX');
+  const [selectedAssetCode, setSelectedAssetCode] = useState<string>('USD');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [filterType, setFilterType] = useState<'all' | 'crypto' | 'fiat'>('all');
 
@@ -56,7 +66,7 @@ export const MiniAppView: React.FC<MiniAppViewProps> = ({
   const [supportSent, setSupportSent] = useState<boolean>(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  const selectedAsset = assets.find((a) => a.code === selectedAssetCode) || assets[1];
+  const selectedAsset = assets.find((a) => a.code === selectedAssetCode) || assets[0];
   const numericAmount = parseFloat(amountStr) || 0;
   const conversion = convertCurrency(numericAmount > 0 ? numericAmount : 1, fromCode, toCode, assets);
 
@@ -103,29 +113,52 @@ export const MiniAppView: React.FC<MiniAppViewProps> = ({
           <div className="flex items-center gap-2 text-xs text-blue-400 font-medium mb-1">
             <span>Telegram WebApp Mini App</span>
             <span>·</span>
-            <span>Real-Time Spot & Fiat Engine</span>
+            <a
+              href={ARZDIGITAL_USD_URL}
+              target="_blank"
+              rel="noreferrer"
+              className="text-emerald-400 hover:underline flex items-center gap-1"
+            >
+              <span>منبع نرخ: ArzDigital.com</span>
+              <ExternalLink className="w-3 h-3" />
+            </a>
+            <span>·</span>
+            <span className="font-mono text-slate-400">Sync: {lastArzSyncTime}</span>
           </div>
           <h2 className="text-xl font-bold text-slate-100">
             {t.btnMiniApp} — پنل پیشرفته نرخ، نمودار سود/زیان و تبدیل ارز
           </h2>
         </div>
 
-        {/* 6-Language Segmented Switcher inside Mini App */}
-        <div className="flex items-center gap-1.5 flex-wrap bg-slate-950 p-1.5 rounded-xl border border-slate-800">
-          {(['fa', 'en', 'ru', 'ar', 'zh', 'tr'] as LanguageCode[]).map((lCode) => (
+        <div className="flex items-center gap-2 flex-wrap">
+          {onSyncArzDigital && (
             <button
-              key={lCode}
               type="button"
-              onClick={() => onChangeLang(lCode)}
-              className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
-                lang === lCode
-                  ? 'bg-blue-600 text-white shadow-xs'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
+              onClick={onSyncArzDigital}
+              className="px-3 py-2 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-xs font-semibold text-emerald-300 transition-colors flex items-center gap-1.5"
             >
-              {TRANSLATIONS[lCode].langName}
+              <RefreshCw className={`w-3.5 h-3.5 ${isSyncingArzDigital ? 'animate-spin' : ''}`} />
+              <span>بروزرسانی از ArzDigital</span>
             </button>
-          ))}
+          )}
+
+          {/* 6-Language Segmented Switcher inside Mini App */}
+          <div className="flex items-center gap-1.5 flex-wrap bg-slate-950 p-1.5 rounded-xl border border-slate-800">
+            {(['fa', 'en', 'ru', 'ar', 'zh', 'tr'] as LanguageCode[]).map((lCode) => (
+              <button
+                key={lCode}
+                type="button"
+                onClick={() => onChangeLang(lCode)}
+                className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                  lang === lCode
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                {TRANSLATIONS[lCode].langName}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -138,7 +171,7 @@ export const MiniAppView: React.FC<MiniAppViewProps> = ({
               <Calculator className="w-4 h-4 text-blue-400" />
               <span>{t.btnConvert}</span>
             </h3>
-            <span className="text-xs text-slate-400 font-mono">12 Currencies & Cryptos</span>
+            <span className="text-xs text-emerald-400 font-mono">ArzDigital Live ({assets.length} Assets)</span>
           </div>
 
           <div className="space-y-3.5">
@@ -234,6 +267,12 @@ export const MiniAppView: React.FC<MiniAppViewProps> = ({
                 <div className="text-2xl font-mono font-bold text-emerald-400 tabular-nums">
                   {formatCurrencyValue(conversion.convertedAmount)} {conversion.toAsset.code}
                 </div>
+                <div className="text-xs font-mono text-slate-300 tabular-nums">
+                  🇮🇷 معادل تومانی (ArzDigital):{' '}
+                  <span className="text-amber-400 font-bold">
+                    {formatCurrencyValue(conversion.tomanValue)} تومان
+                  </span>
+                </div>
                 <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs font-mono text-slate-400 tabular-nums">
                   <span>
                     1 {conversion.fromAsset.code} = {formatCurrencyValue(conversion.unitRate)}{' '}
@@ -257,11 +296,14 @@ export const MiniAppView: React.FC<MiniAppViewProps> = ({
                 {t.priceCardTitle} — {selectedAsset.names[lang]} ({selectedAsset.code})
               </h3>
               <p className="text-xs text-slate-400">
-                روی هر ارز در جدول پایین کلیک کنید تا نمودار سود و زیان آن نمایش داده شود
+                نرخ تومانی از ArzDigital:{' '}
+                <strong className="text-emerald-400 font-mono">
+                  {formatCurrencyValue(getAssetTomanPrice(selectedAsset, assets))} تومان
+                </strong>
               </p>
             </div>
             <div className="flex items-center gap-1.5 flex-wrap">
-              {['TRX', 'TON', 'BTC', 'ETH', 'USD', 'IRT'].map((code) => (
+              {['USD', 'TRX', 'TON', 'BTC', 'ETH', 'EUR', 'AED', 'TRY'].map((code) => (
                 <button
                   key={code}
                   type="button"
@@ -327,7 +369,7 @@ export const MiniAppView: React.FC<MiniAppViewProps> = ({
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <h3 className="text-base font-bold text-slate-100">
-              جدول لحظه‌ای قیمت ارزها و کریپتو (Live Market Board)
+              جدول لحظه‌ای قیمت ارزها و کریپتو (منبع: ArzDigital.com)
             </h3>
           </div>
 
@@ -366,17 +408,18 @@ export const MiniAppView: React.FC<MiniAppViewProps> = ({
             <thead>
               <tr className="border-b border-slate-800 text-xs text-slate-400">
                 <th className="py-2.5 px-3 text-right">ارز / واحد پول</th>
+                <th className="py-2.5 px-3 text-right">نرخ تومانی (ArzDigital)</th>
                 <th className="py-2.5 px-3 text-right">قیمت دلاری (USD)</th>
-                <th className="py-2.5 px-3 text-right">معادل تومانی (IRT)</th>
                 <th className="py-2.5 px-3 text-right">سود/زیان ۲۴ ساعته</th>
                 <th className="py-2.5 px-3 text-right">سود/زیان ۷ روزه</th>
-                <th className="py-2.5 px-3 text-right">عملیات</th>
+                <th className="py-2.5 px-3 text-right">عملیات / منبع</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/70 text-sm">
               {filteredAssets.map((a) => {
                 const up24 = a.change24h >= 0;
                 const up7 = a.change7d >= 0;
+                const tomanVal = getAssetTomanPrice(a, assets);
                 return (
                   <tr
                     key={a.code}
@@ -390,11 +433,11 @@ export const MiniAppView: React.FC<MiniAppViewProps> = ({
                         {a.code} · {a.type.toUpperCase()}
                       </div>
                     </td>
+                    <td className="py-3 px-3 text-right font-mono font-bold tabular-nums text-emerald-400">
+                      {formatCurrencyValue(tomanVal)} تومان
+                    </td>
                     <td className="py-3 px-3 text-right font-mono tabular-nums text-slate-100">
                       ${formatCurrencyValue(a.priceUsd)}
-                    </td>
-                    <td className="py-3 px-3 text-right font-mono tabular-nums text-slate-300">
-                      {formatCurrencyValue(a.code === 'IRT' ? 1 : a.priceUsd * 69500)} تومان
                     </td>
                     <td className="py-3 px-3 text-right font-mono tabular-nums">
                       <span
@@ -416,13 +459,25 @@ export const MiniAppView: React.FC<MiniAppViewProps> = ({
                       {a.change7d.toFixed(2)}%
                     </td>
                     <td className="py-3 px-3 text-right">
-                      <button
-                        type="button"
-                        onClick={() => setSelectedAssetCode(a.code)}
-                        className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-blue-600 text-xs font-medium text-slate-200 hover:text-white transition-colors whitespace-nowrap"
-                      >
-                        مشاهده نمودار
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedAssetCode(a.code)}
+                          className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-blue-600 text-xs font-medium text-slate-200 hover:text-white transition-colors whitespace-nowrap"
+                        >
+                          نمودار
+                        </button>
+                        <a
+                          href={a.arzdigitalUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="px-2.5 py-1.5 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-800 text-xs text-blue-400 font-mono flex items-center gap-1 whitespace-nowrap"
+                          title="مشاهده در ArzDigital.com"
+                        >
+                          <span>ArzDigital</span>
+                          <ExternalLink className="w-3 h-3" />
+                        </a>
+                      </div>
                     </td>
                   </tr>
                 );

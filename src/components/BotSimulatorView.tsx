@@ -10,6 +10,7 @@ import {
   Sparkles,
   RotateCcw,
   Terminal,
+  RefreshCw,
 } from 'lucide-react';
 import {
   AssetInfo,
@@ -19,6 +20,8 @@ import {
   convertCurrency,
   formatCurrencyValue,
   normalizeDigits,
+  getAssetTomanPrice,
+  ARZDIGITAL_USD_URL,
 } from '../utils/currencyEngine';
 import { PnLChartCanvas } from './PnLChartCanvas';
 
@@ -57,6 +60,9 @@ interface BotSimulatorViewProps {
   tronWallet: string;
   tickets: SupportTicket[];
   onAddTicket: (msg: string) => void;
+  onSyncArzDigital?: () => void;
+  isSyncingArzDigital?: boolean;
+  lastArzSyncTime?: string;
 }
 
 type BotFSMState =
@@ -81,6 +87,9 @@ export const BotSimulatorView: React.FC<BotSimulatorViewProps> = ({
   tronWallet,
   tickets,
   onAddTicket,
+  onSyncArzDigital,
+  isSyncingArzDigital = false,
+  lastArzSyncTime = 'Live',
 }) => {
   const t = TRANSLATIONS[lang];
   const [chatMode, setChatMode] = useState<'private' | 'group'>('private');
@@ -90,8 +99,12 @@ export const BotSimulatorView: React.FC<BotSimulatorViewProps> = ({
   const [inputText, setInputText] = useState<string>('');
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
+  const usdAsset = assets.find((a) => a.code === 'USD') || assets[0];
+
   const [messages, setMessages] = useState<BotMessage[]>(() => {
     const trxAsset = assets.find((a) => a.code === 'TRX') || assets[1];
+    const tomanVal = getAssetTomanPrice(trxAsset, assets);
+    const isUp = trxAsset.change24h >= 0;
     return [
       {
         id: 'welcome-1',
@@ -104,10 +117,11 @@ export const BotSimulatorView: React.FC<BotSimulatorViewProps> = ({
         sender: 'bot',
         text:
           `📊 **${TRANSLATIONS[lang].priceCardTitle} — ${trxAsset.names[lang]}**\n` +
-          `💵 Price (USD): $${formatCurrencyValue(trxAsset.priceUsd)}\n` +
-          `🇮🇷 ${TRANSLATIONS[lang].tomanEquivalent}: ${formatCurrencyValue(trxAsset.priceUsd * 69500)} IRT\n` +
-          `📈 ${TRANSLATIONS[lang].pnl24hLabel}: +${trxAsset.change24h}% (Profit)\n` +
-          `📊 ${TRANSLATIONS[lang].pnl7dLabel}: +${trxAsset.change7d}%`,
+          `🇮🇷 ${TRANSLATIONS[lang].tomanEquivalent}: **${formatCurrencyValue(tomanVal)} تومان**\n` +
+          `💵 Price (USD): **$${formatCurrencyValue(trxAsset.priceUsd)}**\n` +
+          `📈 ${TRANSLATIONS[lang].pnl24hLabel}: ${isUp ? '+' : ''}${trxAsset.change24h}% (${isUp ? 'Profit' : 'Loss'})\n` +
+          `📊 ${TRANSLATIONS[lang].pnl7dLabel}: ${trxAsset.change7d >= 0 ? '+' : ''}${trxAsset.change7d}%\n` +
+          `📡 منبع: arzdigital.com`,
         timestamp: '10:01',
         chartAsset: trxAsset,
       },
@@ -155,7 +169,7 @@ export const BotSimulatorView: React.FC<BotSimulatorViewProps> = ({
 
     const isProfit = found.change24h >= 0;
     const pnlSign = isProfit ? '+' : '';
-    const tomanPrice = found.code === 'IRT' ? 1 : found.priceUsd * 69500;
+    const tomanPrice = getAssetTomanPrice(found, assets);
 
     const replyMsg: BotMessage = {
       id: `b-${Date.now() + 1}`,
@@ -163,10 +177,11 @@ export const BotSimulatorView: React.FC<BotSimulatorViewProps> = ({
       text:
         `📊 **${t.priceCardTitle}**\n` +
         `🏷 **${found.names[lang]} (${found.code})**\n\n` +
+        `🇮🇷 **${t.tomanEquivalent}:** ${formatCurrencyValue(tomanPrice)} تومان\n` +
         `💵 **USD Price:** $${formatCurrencyValue(found.priceUsd)}\n` +
-        `🇮🇷 **${t.tomanEquivalent}:** ${formatCurrencyValue(tomanPrice)} IRT\n` +
         `${isProfit ? '🟢' : '🔴'} **${t.pnl24hLabel}:** ${pnlSign}${found.change24h.toFixed(2)}%\n` +
-        `📈 **${t.pnl7dLabel}:** ${found.change7d >= 0 ? '+' : ''}${found.change7d.toFixed(2)}%`,
+        `📈 **${t.pnl7dLabel}:** ${found.change7d >= 0 ? '+' : ''}${found.change7d.toFixed(2)}%\n` +
+        `📡 **Source:** arzdigital.com`,
       timestamp: nowTime(),
       chartAsset: found,
     };
@@ -269,7 +284,7 @@ export const BotSimulatorView: React.FC<BotSimulatorViewProps> = ({
         sender: 'bot',
         text:
           '👥 **Group & Channel Mode Activated!**\n' +
-          'ربات با موفقیت در حالت گروه و کانال قرار گرفت. در گروه‌ها می‌توانید دستوراتی مثل `/price ton` یا `/convert 10 usd trx` یا `قیمت ترون` را ارسال کنید.',
+          'ربات با موفقیت در حالت گروه و کانال قرار گرفت. در گروه‌ها می‌توانید دستوراتی مثل `/price usd` یا `/convert 10 usd trx` یا `قیمت دلار` را ارسال کنید.',
         timestamp: nowTime(),
       });
       return;
@@ -346,7 +361,8 @@ export const BotSimulatorView: React.FC<BotSimulatorViewProps> = ({
               text:
                 `🔄 **${t.conversionResultTitle}**\n\n` +
                 `🔢 **${formatCurrencyValue(res.amount)} ${res.fromAsset.names[lang]} (${res.fromAsset.code})** =\n` +
-                `✅ **${formatCurrencyValue(res.convertedAmount)} ${res.toAsset.names[lang]} (${res.toAsset.code})**\n\n` +
+                `✅ **${formatCurrencyValue(res.convertedAmount)} ${res.toAsset.names[lang]} (${res.toAsset.code})**\n` +
+                `🇮🇷 **${t.tomanEquivalent}:** ${formatCurrencyValue(res.tomanValue)} تومان\n\n` +
                 `📌 ${t.unitRateLabel}: 1 ${res.fromAsset.code} = ${formatCurrencyValue(res.unitRate)} ${res.toAsset.code}\n` +
                 `🔁 1 ${res.toAsset.code} = ${formatCurrencyValue(res.reverseRate)} ${res.fromAsset.code}`,
               timestamp: nowTime(),
@@ -432,7 +448,8 @@ export const BotSimulatorView: React.FC<BotSimulatorViewProps> = ({
           text:
             `🔄 **${t.conversionResultTitle}**\n\n` +
             `💵 **${formatCurrencyValue(res.amount)} ${res.fromAsset.names[lang]} (${res.fromAsset.code})** =\n` +
-            `🎯 **${formatCurrencyValue(res.convertedAmount)} ${res.toAsset.names[lang]} (${res.toAsset.code})**\n\n` +
+            `🎯 **${formatCurrencyValue(res.convertedAmount)} ${res.toAsset.names[lang]} (${res.toAsset.code})**\n` +
+            `🇮🇷 **${t.tomanEquivalent}:** ${formatCurrencyValue(res.tomanValue)} تومان\n\n` +
             `📌 ${t.unitRateLabel}: 1 ${res.fromAsset.code} = ${formatCurrencyValue(res.unitRate)} ${res.toAsset.code}\n` +
             `🔁 1 ${res.toAsset.code} = ${formatCurrencyValue(res.reverseRate)} ${res.fromAsset.code}`,
           timestamp: nowTime(),
@@ -487,17 +504,28 @@ export const BotSimulatorView: React.FC<BotSimulatorViewProps> = ({
                 <h2 className="text-sm font-bold text-slate-100">
                   {chatMode === 'private' ? 'ArzPulse Pro Bot (@ArzPulseBot)' : 'گروه تریدرها و نرخ ارز (Telegram Group)'}
                 </h2>
-                <span className="text-[11px] text-emerald-400 font-mono">bot · aiogram 3.x</span>
+                <span className="text-[11px] text-emerald-400 font-mono">ArzDigital Live</span>
               </div>
               <p className="text-xs text-slate-400">
                 {chatMode === 'private'
-                  ? 'ReplyKeyboardMarkup (success / primary / danger colored buttons)'
-                  : 'Group & Channel Mode Active — Commands: /price trx · /convert 10 usd trx'}
+                  ? `دلار آزاد ArzDigital: ${formatCurrencyValue(usdAsset.priceToman)} تومان`
+                  : 'Group & Channel Mode Active — Commands: /price usd · /convert 10 usd trx'}
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-1.5">
+            {onSyncArzDigital && (
+              <button
+                type="button"
+                onClick={onSyncArzDigital}
+                className="px-2.5 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-xs font-medium text-emerald-300 transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                title="Sync Live from ArzDigital.com"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncingArzDigital ? 'animate-spin' : ''}`} />
+                <span className="hidden sm:inline">بروزرسانی ArzDigital</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setChatMode(chatMode === 'private' ? 'group' : 'private')}
@@ -678,7 +706,7 @@ export const BotSimulatorView: React.FC<BotSimulatorViewProps> = ({
               {(fsmState === 'waiting_price_asset' ||
                 fsmState === 'convert_step1_from' ||
                 fsmState === 'convert_step2_to') &&
-                ['دلار', 'ترون', 'تون کوین', 'بیت کوین', 'تومان', 'یورو'].map((item) => (
+                ['دلار', 'ترون', 'تون کوین', 'بیت کوین', 'تومان', 'یورو', 'درهم', 'لیر'].map((item) => (
                   <button
                     key={item}
                     type="button"
@@ -716,14 +744,14 @@ export const BotSimulatorView: React.FC<BotSimulatorViewProps> = ({
             onChange={(e) => setInputText(e.target.value)}
             placeholder={
               fsmState === 'waiting_price_asset'
-                ? 'نام ارز را بنویسید (مثلاً ترون، دلار، BTC)...'
+                ? 'نام ارز را بنویسید (مثلاً دلار، ترون، درهم، BTC)...'
                 : fsmState === 'convert_step1_from'
                 ? 'ارز اول را بنویسید (مثلاً دلار)...'
                 : fsmState === 'convert_step2_to'
-                ? 'ارز دوم را بنویسید (مثلاً ترون)...'
+                ? 'ارز دوم را بنویسید (مثلاً ترون یا تومان)...'
                 : fsmState === 'convert_step3_amount'
                 ? 'تعداد را وارد کنید (مثلاً 1 یا 100)...'
-                : 'پیام یا نام ارز (مثلاً دلار، ترون، /price ton)...'
+                : 'پیام یا نام ارز (مثلاً دلار، ترون، /price usd)...'
             }
             aria-label="Telegram Bot Message Input"
             className="flex-1 bg-slate-900 border border-slate-800 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none"
@@ -843,38 +871,86 @@ export const BotSimulatorView: React.FC<BotSimulatorViewProps> = ({
         </div>
       </div>
 
-      {/* Right Column: One-Line Bash Curl Installer, Quick Test & Creator Wallets */}
+      {/* Right Column: ArzDigital Live Rate Banner, One-Line Bash Installer, Quick Test & Creator Wallets */}
       <div className="lg:col-span-5 space-y-5">
-        {/* One-Click Bash Curl Auto-Installer Box on Main Screen */}
+        {/* Live ArzDigital.com Feed Card */}
+        <div className="bg-slate-900 border border-blue-500/40 rounded-2xl p-4 space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <span className="text-[11px] font-mono text-emerald-400 font-semibold block">
+                LIVE RATE SOURCE · ARZDIGITAL.COM
+              </span>
+              <h3 className="text-sm font-bold text-slate-100">
+                نرخ لحظه‌ای دلار و ارزها از سایت ArzDigital
+              </h3>
+            </div>
+            <span className="px-2.5 py-1 rounded-lg bg-emerald-600/20 border border-emerald-500/40 text-emerald-300 font-mono text-xs font-bold tabular-nums">
+              1 USD = {formatCurrencyValue(usdAsset.priceToman)} تومان
+            </span>
+          </div>
+
+          <div className="flex items-center justify-between gap-2 text-xs text-slate-300 bg-slate-950 p-2.5 rounded-xl border border-slate-800" dir="ltr">
+            <a
+              href={ARZDIGITAL_USD_URL}
+              target="_blank"
+              rel="noreferrer"
+              className="text-blue-400 hover:underline font-mono truncate flex items-center gap-1"
+            >
+              <span>arzdigital.com/currencies/united-states-dollar/</span>
+              <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+            </a>
+            <span className="text-[11px] text-slate-400 font-mono shrink-0">
+              Sync: {lastArzSyncTime}
+            </span>
+          </div>
+        </div>
+
+        {/* One-Click Auto-Installer Box on Main Screen (Zero 404 + Prompts for Token & Owner ID) */}
         <div className="bg-slate-900 border border-emerald-500/40 rounded-2xl p-5 space-y-3">
           <div className="flex items-center justify-between gap-2">
             <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
               <Terminal className="w-4 h-4 text-emerald-400" />
-              <span>دستور نصب اتوماتیک روی سرور (One-Line Bash Curl)</span>
+              <span>نصب فوری روی سرور (متصل به ArzDigital + بدون ارور 404)</span>
             </h3>
+          </div>
+          <p className="text-xs text-slate-300 leading-relaxed">
+            با زدن دکمه سبز زیر، <strong className="text-white font-bold">دستور نصب مستقیم سرور (متصل به نرخ لحظه‌ای ArzDigital.com)</strong> کپی می‌شود؛ آن را در ترمینال سرور (<code className="font-mono text-emerald-400">root@...</code>) پیست کنید تا <strong className="text-emerald-400 font-bold">همان اول توکن ربات و آیدی عددی مالک را از شما بپرسد</strong> و خودکار نصب کند:
+          </p>
+          <div className="flex flex-col sm:flex-row gap-2">
             <button
               type="button"
-              onClick={() =>
-                copyToClipboard(
-                  'bash <(curl -Ls https://raw.githubusercontent.com/samkaren/ArzPulse-Bot/main/install.sh)',
-                  'main-bash-curl'
-                )
-              }
-              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors shrink-0"
+              onClick={() => {
+                import('../utils/codeGenerators').then(({ generateDirectZero404ServerCommand }) => {
+                  copyToClipboard(
+                    generateDirectZero404ServerCommand({
+                      adminUsername,
+                      adminPassword,
+                      githubUrl,
+                      tonWallet,
+                      tronWallet,
+                    }),
+                    'main-zero404-cmd'
+                  );
+                });
+              }}
+              className="flex-1 py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-sm"
             >
-              {copiedKey === 'main-bash-curl' ? (
-                <Check className="w-3.5 h-3.5" />
+              {copiedKey === 'main-zero404-cmd' ? (
+                <Check className="w-4 h-4" />
               ) : (
-                <Copy className="w-3.5 h-3.5" />
+                <Copy className="w-4 h-4" />
               )}
-              <span>{copiedKey === 'main-bash-curl' ? 'کپی شد!' : 'کپی دستور نصب'}</span>
+              <span>
+                {copiedKey === 'main-zero404-cmd'
+                  ? 'کپی شد! حالا در ترمینال سرور Paste کنید'
+                  : 'کپی دستور نصب مستقیم سرور (تضمینی بدون ارور 404)'}
+              </span>
             </button>
           </div>
-          <p className="text-xs text-slate-400">
-            با کپی و اجرای این دستور در ترمینال سرور، کل ربات، وب‌پنل و دستور <code className="text-emerald-400 font-mono">sudo arz</code> خودکار نصب می‌شوند:
-          </p>
-          <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 font-mono text-xs text-emerald-400 overflow-x-auto select-all" dir="ltr">
-            bash &lt;(curl -Ls https://raw.githubusercontent.com/samkaren/ArzPulse-Bot/main/install.sh)
+          <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 font-mono text-[11px] text-slate-300 space-y-1" dir="ltr">
+            <div className="text-emerald-400"># Prompts immediately on your server:</div>
+            <div>🔑 1) Enter your Telegram Bot API Token (from @BotFather):</div>
+            <div>👑 2) Enter your Numeric Owner Telegram ID (e.g. 123456789):</div>
           </div>
         </div>
 
@@ -882,21 +958,21 @@ export const BotSimulatorView: React.FC<BotSimulatorViewProps> = ({
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
           <div className="flex items-center justify-between">
             <h3 className="text-base font-bold text-slate-100">
-              تست سریع امکانات ربات (One-Click Demo)
+              تست سریع امکانات ربات (ArzDigital Live Demo)
             </h3>
-            <span className="text-xs text-slate-400">6 زبان زنده</span>
+            <span className="text-xs text-slate-400">16 ارز و رمزارز</span>
           </div>
           <p className="text-xs text-slate-400 leading-relaxed">
-            می‌توانید از کیبورد رنگی پایین چت استفاده کنید یا با کلیک روی دکمه‌های زیر، سناریوهای اصلی که خواستید (تبدیل ۱ دلار به ترون، نمودار سود و زیان، دریافت رمز پنل مالک و...) را در لحظه در ربات ببینید:
+            با کلیک روی دکمه‌های زیر، استعلام نرخ لحظه‌ای دلار آزاد، ترون، تبدیل ۱ دلار به ترون و دریافت رمز پنل مالک را در لحظه در ربات ببینید:
           </p>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
             <button
               type="button"
-              onClick={() => handlePriceQuery('TRX', '📊 قیمت ترون (TRX) + نمودار')}
+              onClick={() => handlePriceQuery('USD', '📊 قیمت دلار آمریکا (USD) از ArzDigital')}
               className="px-3.5 py-2.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-xs font-medium text-emerald-400 text-right transition-colors flex items-center justify-between"
             >
-              <span>نمودار سود/زیان ترون (TRX)</span>
+              <span>قیمت دلار آزاد (ArzDigital)</span>
               <Sparkles className="w-3.5 h-3.5 shrink-0" />
             </button>
 
@@ -920,7 +996,7 @@ export const BotSimulatorView: React.FC<BotSimulatorViewProps> = ({
                         `💵 **1 ${res.fromAsset.names[lang]} (USD)** =\n` +
                         `🎯 **${formatCurrencyValue(res.convertedAmount)} ${res.toAsset.names[lang]} (TRX)**\n\n` +
                         `📌 1 TRX = $${formatCurrencyValue(res.reverseRate)} USD\n` +
-                        `🇮🇷 معادل تومانی: 69,500 تومان`,
+                        `🇮🇷 معادل تومانی (ArzDigital): ${formatCurrencyValue(res.tomanValue)} تومان`,
                       timestamp: nowTime(),
                     }
                   );

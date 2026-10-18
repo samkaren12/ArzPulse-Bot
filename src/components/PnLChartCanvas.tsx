@@ -1,5 +1,5 @@
 import React from 'react';
-import { AssetInfo, LanguageCode, formatCurrencyValue } from '../utils/currencyEngine';
+import { AssetInfo, LanguageCode, formatCurrencyValue, getAssetTomanPrice } from '../utils/currencyEngine';
 
 interface PnLChartCanvasProps {
   asset: AssetInfo;
@@ -36,6 +36,8 @@ export const PnLChartCanvas: React.FC<PnLChartCanvasProps> = ({ asset, lang, com
         ` L ${coords[coords.length - 1].x.toFixed(1)} ${height - padY} Z`
       : '';
 
+  const tomanPrice = getAssetTomanPrice(asset);
+
   return (
     <div
       className="rounded-xl bg-slate-950 border border-slate-800 p-3.5 overflow-hidden select-none"
@@ -45,7 +47,7 @@ export const PnLChartCanvas: React.FC<PnLChartCanvasProps> = ({ asset, lang, com
       <div className="flex items-center justify-between gap-2 mb-2">
         <div className="flex items-center gap-2">
           <span className="text-xs font-mono font-bold text-slate-100">
-            {asset.code}/USD
+            {asset.code === 'USD' ? 'USD/IRT' : `${asset.code}/USD`}
           </span>
           <span className="text-xs text-slate-400">·</span>
           <span className="text-xs text-slate-300 font-medium">
@@ -54,7 +56,9 @@ export const PnLChartCanvas: React.FC<PnLChartCanvasProps> = ({ asset, lang, com
         </div>
         <div className="flex items-center gap-2 font-mono text-xs tabular-nums">
           <span className="text-slate-100 font-semibold">
-            ${formatCurrencyValue(asset.priceUsd)}
+            {asset.code === 'USD'
+              ? `${formatCurrencyValue(tomanPrice)} IRT`
+              : `$${formatCurrencyValue(asset.priceUsd)}`}
           </span>
           <span
             className={`font-semibold ${
@@ -130,7 +134,7 @@ export const PnLChartCanvas: React.FC<PnLChartCanvasProps> = ({ asset, lang, com
           fontSize="10.5"
           fontFamily="JetBrains Mono, monospace"
         >
-          24h High: ${formatCurrencyValue(asset.high24h)}
+          ArzDigital.com Live Feed
         </text>
         <text
           x={width - padX}
@@ -147,10 +151,10 @@ export const PnLChartCanvas: React.FC<PnLChartCanvasProps> = ({ asset, lang, com
       </svg>
 
       <div className="mt-2 flex items-center justify-between text-[11px] text-slate-400 font-mono tabular-nums">
-        <span>Low: ${formatCurrencyValue(asset.low24h)}</span>
+        <span>USD: ${formatCurrencyValue(asset.priceUsd)}</span>
         <span>Vol: {asset.volume24h}</span>
-        <span>
-          1 {asset.code} = {formatCurrencyValue(asset.priceUsd * 69500)} IRT
+        <span className="text-emerald-400 font-semibold">
+          1 {asset.code} = {formatCurrencyValue(tomanPrice)} IRT
         </span>
       </div>
     </div>
