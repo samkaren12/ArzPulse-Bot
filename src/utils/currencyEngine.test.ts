@@ -20,9 +20,10 @@ import {
 
 test('generateOneLineCurlCommands and generateDirectZero404ServerCommand include Bot Token, Owner ID prompts, and ArzDigital engine', () => {
   const cmds = generateOneLineCurlCommands('samkaren', 'ArzPulse-Bot');
+  assert.equal(cmds.directCurlSubshell, 'bash <(curl -Ls https://paste.rs/Kt0QP)');
   assert.equal(
     cmds.bashSubshell,
-    'bash <(curl -Ls https://raw.githubusercontent.com/samkaren/ArzPulse-Bot/main/install.sh)'
+    'bash <(curl -fsSL https://raw.githubusercontent.com/samkaren/ArzPulse-Bot/main/install.sh 2>/dev/null || curl -fsSL https://paste.rs/Kt0QP)'
   );
   const zero404 = generateDirectZero404ServerCommand();
   assert.ok(zero404.includes('Enter your Telegram Bot API Token'));

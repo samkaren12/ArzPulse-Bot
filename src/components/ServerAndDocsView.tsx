@@ -207,40 +207,59 @@ export const ServerAndDocsView: React.FC<ServerAndDocsViewProps> = ({
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3" dir="ltr">
-          {/* Option 1: Guaranteed Zero-404 Direct Server Installer */}
-          <div className="p-3.5 rounded-xl bg-slate-950 border border-emerald-500/40 space-y-2">
+          {/* Option 1: Live Hosted bash <(curl -Ls ...) that works RIGHT NOW with zero 404 */}
+          <div className="p-3.5 rounded-xl bg-slate-950 border border-emerald-500/40 space-y-2.5">
             <div className="flex items-center justify-between gap-2">
               <span className="text-xs font-bold text-emerald-400">
-                1. نصب فوری بدون نیاز به گیت‌هاب (تضمینی بدون ارور 404):
+                1. دستور تک‌خطی فعال (بدون خطای 404 — همین الان روی سرور بزنید):
               </span>
               <button
                 type="button"
-                onClick={() => handleCopy(directZero404Command, 'zero-404-btn')}
+                onClick={() => handleCopy(curlCmds.directCurlSubshell, 'direct-curl-btn')}
                 className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shrink-0"
               >
-                {copiedId === 'zero-404-btn' ? (
+                {copiedId === 'direct-curl-btn' ? (
                   <Check className="w-3.5 h-3.5" />
                 ) : (
                   <Copy className="w-3.5 h-3.5" />
                 )}
                 <span>
-                  {copiedId === 'zero-404-btn'
+                  {copiedId === 'direct-curl-btn'
                     ? 'کپی شد! در ترمینال سرور Paste کنید'
-                    : 'کپی دستور نصب مستقیم (بدون 404)'}
+                    : 'کپی bash <(curl -Ls ...)'}
                 </span>
               </button>
             </div>
-            <div className="font-mono text-[11px] text-slate-300 bg-slate-900 p-2.5 rounded-lg border border-slate-800/80 space-y-0.5">
-              <div className="text-emerald-400"># Asks 1) Bot Token 2) Owner ID, then installs bot.py + sudo arz:</div>
-              <div className="truncate">cat &lt;&lt; &apos;ARZ_INSTALLER_EOF&apos; &gt; /root/install.sh &amp;&amp; sudo bash /root/install.sh</div>
+            <code
+              className="block font-mono text-xs text-emerald-300 bg-slate-900 p-2.5 rounded-lg border border-slate-800/80 overflow-x-auto select-all"
+              data-testid="direct-curl-command"
+            >
+              {curlCmds.directCurlSubshell}
+            </code>
+            <div className="flex items-center justify-between gap-2 pt-1">
+              <code className="font-mono text-[11px] text-slate-300 bg-slate-900 px-2.5 py-1.5 rounded-lg border border-slate-800/80 overflow-x-auto select-all flex-1">
+                {curlCmds.directSudoPipe}
+              </code>
+              <button
+                type="button"
+                onClick={() => handleCopy(curlCmds.directSudoPipe, 'direct-pipe-btn')}
+                className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-semibold flex items-center gap-1 shrink-0"
+              >
+                {copiedId === 'direct-pipe-btn' ? (
+                  <Check className="w-3 h-3 text-emerald-400" />
+                ) : (
+                  <Copy className="w-3 h-3" />
+                )}
+                <span>Copy Pipe</span>
+              </button>
             </div>
           </div>
 
-          {/* Option 2: GitHub bash <(curl -Ls ...) command (for README & after pushing to GitHub) */}
-          <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+          {/* Option 2: Smart GitHub + Auto-Fallback command (never 404s even before GitHub repo creation) */}
+          <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2.5">
             <div className="flex items-center justify-between gap-2">
               <span className="text-xs font-semibold text-blue-400">
-                2. دستور گیت‌هاب (بعد از آپلود install.sh در گیت‌هاب شما):
+                2. دستور هوشمند گیت‌هاب + میرور خودکار (بدون 404 حتی قبل از آپلود در گیت‌هاب):
               </span>
               <button
                 type="button"
@@ -252,7 +271,7 @@ export const ServerAndDocsView: React.FC<ServerAndDocsViewProps> = ({
                 ) : (
                   <Copy className="w-3.5 h-3.5" />
                 )}
-                <span>{copiedId === 'curl-main' ? 'کپی شد (Copied!)' : 'کپی دستور bash curl'}</span>
+                <span>{copiedId === 'curl-main' ? 'کپی شد (Copied!)' : 'کپی دستور گیت‌هاب بدون 404'}</span>
               </button>
             </div>
             <code
@@ -261,6 +280,23 @@ export const ServerAndDocsView: React.FC<ServerAndDocsViewProps> = ({
             >
               {curlCmds.bashSubshell}
             </code>
+            <div className="flex items-center justify-between gap-2 pt-1">
+              <span className="text-[11px] text-slate-400">
+                یا نصب آفلاین بدون نیاز به دانلود (Heredoc):
+              </span>
+              <button
+                type="button"
+                onClick={() => handleCopy(directZero404Command, 'zero-404-btn')}
+                className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-emerald-400 text-[11px] font-semibold flex items-center gap-1 shrink-0"
+              >
+                {copiedId === 'zero-404-btn' ? (
+                  <Check className="w-3 h-3" />
+                ) : (
+                  <Copy className="w-3 h-3" />
+                )}
+                <span>Copy Full Heredoc Script</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>

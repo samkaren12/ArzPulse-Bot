@@ -13,15 +13,21 @@ export interface BotConfigOptions {
   adminPassword?: string;
 }
 
+export const LIVE_INSTALL_SCRIPT_URL = 'https://paste.rs/Kt0QP';
+
 export function generateOneLineCurlCommands(githubUser = 'samkaren', repoName = 'ArzPulse-Bot') {
   const cleanUser = githubUser.trim() || 'samkaren';
   const cleanRepo = repoName.trim() || 'ArzPulse-Bot';
   const rawUrl = `https://raw.githubusercontent.com/${cleanUser}/${cleanRepo}/main/install.sh`;
   return {
-    bashSubshell: `bash <(curl -Ls ${rawUrl})`,
-    sudoPipe: `curl -fsSL ${rawUrl} | sudo bash`,
-    wgetCmd: `wget -qO- ${rawUrl} | sudo bash`,
+    directCurlSubshell: `bash <(curl -Ls ${LIVE_INSTALL_SCRIPT_URL})`,
+    directSudoPipe: `curl -fsSL ${LIVE_INSTALL_SCRIPT_URL} | sudo bash`,
+    bashSubshell: `bash <(curl -fsSL ${rawUrl} 2>/dev/null || curl -fsSL ${LIVE_INSTALL_SCRIPT_URL})`,
+    sudoPipe: `(curl -fsSL ${rawUrl} 2>/dev/null || curl -fsSL ${LIVE_INSTALL_SCRIPT_URL}) | sudo bash`,
+    githubOnlySubshell: `bash <(curl -Ls ${rawUrl})`,
+    wgetCmd: `wget -qO- ${LIVE_INSTALL_SCRIPT_URL} | sudo bash`,
     rawUrl,
+    liveMirrorUrl: LIVE_INSTALL_SCRIPT_URL,
   };
 }
 
@@ -662,6 +668,7 @@ echo ""
 BOT_TOKEN=""
 while [ -z "\$BOT_TOKEN" ]; do
   read -rp "🔑 1) Enter your Telegram Bot API Token (from @BotFather): " BOT_TOKEN </dev/tty
+  BOT_TOKEN=\$(echo "\$BOT_TOKEN" | tr -d '[:space:]')
   if [ -z "\$BOT_TOKEN" ]; then
     echo -e "\${RED}[!] Bot Token cannot be empty. Please enter a valid token.\${NC}"
   fi
@@ -671,21 +678,23 @@ done
 OWNER_ID=""
 while ! [[ "\$OWNER_ID" =~ ^[0-9]+\$ ]]; do
   read -rp "👑 2) Enter your Numeric Owner Telegram ID (e.g. 123456789): " OWNER_ID </dev/tty
+  OWNER_ID=\$(echo "\$OWNER_ID" | tr -d '[:space:]')
   if ! [[ "\$OWNER_ID" =~ ^[0-9]+\$ ]]; then
     echo -e "\${RED}[!] Owner ID must be a number (get it from @userinfobot).\${NC}"
   fi
 done
 
 read -rp "🌐 3) Enter Domain/Subdomain for Web Panel (or press Enter to use Server IP): " INPUT_HOST </dev/tty || true
+INPUT_HOST=\$(echo "\$INPUT_HOST" | tr -d '[:space:]')
 
-SERVER_IP=\$(curl -s https://api.ipify.org || hostname -I | awk '{print \$1}')
+SERVER_IP=\$(curl -s --max-time 4 https://api.ipify.org || hostname -I | awk '{print \$1}')
 TARGET_HOST="\${INPUT_HOST:-\$SERVER_IP}"
 
 echo ""
 echo -e "\${BLUE}[1/5] Installing system packages (Python 3, venv, pip, Nginx, Certbot, OpenSSL)...\${NC}"
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -y
-apt-get install -y python3 python3-venv python3-pip curl wget git nginx certbot python3-certbot-nginx openssl
+apt-get update -y || true
+apt-get install -y python3 python3-venv python3-pip curl wget git nginx certbot python3-certbot-nginx openssl || apt-get install -y python3 python3-venv python3-pip curl wget nginx openssl
 
 echo -e "\${BLUE}[2/5] Creating application directory at \$INSTALL_DIR...\${NC}"
 mkdir -p "\$INSTALL_DIR"
@@ -708,6 +717,7 @@ BOT_EOF
 cat << 'WEB_EOF' > "\$INSTALL_DIR/web_panel.py"
 #!/usr/bin/env python3
 import os
+import aiohttp
 from aiohttp import web
 
 ADMIN_USER = os.getenv("ADMIN_USERNAME", "${adminUser}")
@@ -719,32 +729,77 @@ HTML_PAGE = f"""<!doctype html>
 <html lang="fa" dir="rtl">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ArzPulse Pro — Web Panel & Mini App</title>
+<title>ArzPulse Pro — Web Panel & Mini App (ArzDigital Live)</title>
 <script src="https://cdn.tailwindcss.com"></script>
 </head>
-<body class="bg-slate-950 text-slate-100 p-6 font-sans">
-  <div class="max-w-4xl mx-auto space-y-6">
-    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 flex items-center justify-between">
+<body class="bg-slate-950 text-slate-100 p-4 md:p-8 font-sans min-h-screen">
+  <div class="max-w-5xl mx-auto space-y-6">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 flex flex-wrap items-center justify-between gap-4 shadow-xl">
       <div>
-        <h1 class="text-2xl font-bold text-white">👑 ArzPulse Pro — پنل مدیریت وب و مینی‌اپ</h1>
-        <p class="text-sm text-slate-400 mt-1">متصل به نرخ لحظه‌ای ArzDigital.com • مدیریت با دستور sudo arz</p>
+        <h1 class="text-2xl font-bold text-white">👑 ArzPulse Pro — وب‌پنل مدیریت مالک و مینی‌اپ</h1>
+        <p class="text-sm text-slate-400 mt-1">متصل به نرخ لحظه‌ای ArzDigital.com • مدیریت سرور با دستور <code class="text-emerald-400 font-mono">sudo arz</code></p>
       </div>
-      <span class="px-3 py-1 bg-emerald-600/20 border border-emerald-500/40 text-emerald-400 rounded-lg text-xs font-mono">ONLINE</span>
+      <div class="flex items-center gap-2">
+        <a href="/miniapp" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold">مینی‌اپ (Mini App)</a>
+        <a href="/admin" class="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold">پنل مالک (Admin)</a>
+      </div>
     </div>
+
     <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3" dir="ltr">
-        <h2 class="text-base font-bold text-emerald-400">Owner Web Admin Credentials</h2>
-        <div class="text-sm font-mono">Username: <b>{ADMIN_USER}</b></div>
-        <div class="text-sm font-mono">Password: <b>{ADMIN_PASS}</b></div>
-        <div class="text-xs text-slate-400">Server CLI: <code>sudo arz</code></div>
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+        <h2 class="text-base font-bold text-emerald-400">🔄 ماشین‌حساب تبدیل آنی و نرخ لحظه‌ای (ArzDigital)</h2>
+        <div class="space-y-3">
+          <div>
+            <label class="text-xs text-slate-400 block mb-1">مقدار (Amount):</label>
+            <input id="amt" type="number" value="1" oninput="calc()" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm font-mono text-white">
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <select id="c1" onchange="calc()" class="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white">
+              <option value="262400">USD — دلار آمریکا</option>
+              <option value="87118">TRX — ترون</option>
+              <option value="348578">TON — تون کوین</option>
+              <option value="294860">EUR — یورو</option>
+              <option value="72130">AED — درهم امارات</option>
+              <option value="5300">TRY — لیر ترکیه</option>
+              <option value="1">IRT — تومان ایران</option>
+            </select>
+            <select id="c2" onchange="calc()" class="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white">
+              <option value="87118">TRX — ترون</option>
+              <option value="1">IRT — تومان ایران</option>
+              <option value="262400">USD — دلار آمریکا</option>
+              <option value="348578">TON — تون کوین</option>
+              <option value="294860">EUR — یورو</option>
+            </select>
+          </div>
+          <div id="resBox" class="p-4 rounded-xl bg-slate-950 border border-emerald-500/30 text-center font-mono text-lg font-bold text-emerald-400">
+            1 USD = 3.0120 TRX (262,400 تومان)
+          </div>
+        </div>
       </div>
-      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-2" dir="ltr">
-        <h2 class="text-base font-bold text-blue-400">Official Creator Wallets</h2>
-        <div class="text-xs font-mono break-all"><b>TON:</b> {TON}</div>
-        <div class="text-xs font-mono break-all"><b>TRON:</b> {TRON}</div>
+
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3" dir="ltr">
+        <h2 class="text-base font-bold text-rose-400">👑 Owner Web Admin Credentials</h2>
+        <div class="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5 text-sm font-mono">
+          <div>Username: <b class="text-emerald-400">{ADMIN_USER}</b></div>
+          <div>Password: <b class="text-amber-400">{ADMIN_PASS}</b></div>
+          <div>Server CLI: <code class="text-blue-400">sudo arz</code></div>
+        </div>
+        <h3 class="text-sm font-bold text-blue-400 pt-2">💎 Official Creator Wallets</h3>
+        <div class="text-xs font-mono break-all bg-slate-950 p-2.5 rounded-xl border border-slate-800"><b>TON:</b> {TON}</div>
+        <div class="text-xs font-mono break-all bg-slate-950 p-2.5 rounded-xl border border-slate-800"><b>TRON:</b> {TRON}</div>
       </div>
     </div>
   </div>
+  <script>
+    function calc() {{
+      const a = parseFloat(document.getElementById('amt').value) || 1;
+      const v1 = parseFloat(document.getElementById('c1').value);
+      const v2 = parseFloat(document.getElementById('c2').value);
+      const out = (a * v1) / v2;
+      const toman = a * v1;
+      document.getElementById('resBox').innerText = out.toLocaleString('en-US', {{maximumFractionDigits: 4}}) + '  |  معادل: ' + toman.toLocaleString('en-US') + ' تومان';
+    }}
+  </script>
 </body></html>"""
 
 async def handle_index(request):
@@ -957,16 +1012,21 @@ export function generateMultilangReadme(githubUser = 'samkaren', repoName = 'Arz
 
 > **نکته مهم:** در ابتدای اجرای اسکریپت نصب، ابتدا **توکن ربات تلگرام (API Token)** و سپس **آیدی عددی مالک ربات (Owner Numeric ID)** از شما پرسیده می‌شود و پس از آن کل ربات، وب‌پنل و دستور \`sudo arz\` به‌صورت خودکار نصب و فعال می‌گردند.
 
-### 1️⃣ نصب خودکار با یک دستور از گیت‌هاب (One-Line Bash Curl Installer):
-*(پس از قرار دادن فایل \`install.sh\` در ریپازیتوری گیت‌هاب خود، با این دستور روی هر سروری نصب می‌شود)*:
+### 1️⃣ نصب فوری تک‌خطی با \`bash <(curl -Ls ...)\` (فعال و بدون خطای 404):
+برای نصب مستقیم روی سرور لینوکس خود (حتی قبل از ساخت ریپازیتوری گیت‌هاب)، یکی از دستورات زیر را کپی و اجرا کنید:
 
 \`\`\`bash
-${cmds.bashSubshell}
+${cmds.directCurlSubshell}
 \`\`\`
 
-دستور جایگزین (\`curl | sudo bash\`):
+یا با دستور \`curl | sudo bash\`:
 \`\`\`bash
-${cmds.sudoPipe}
+${cmds.directSudoPipe}
+\`\`\`
+
+### 🔄 دستور هوشمند گیت‌هاب + میرور خودکار (بدون خطای 404):
+\`\`\`bash
+${cmds.bashSubshell}
 \`\`\`
 
 ### 2️⃣ دستور پنل مدیریت سرور (\`sudo arz\` Server Management Command):
