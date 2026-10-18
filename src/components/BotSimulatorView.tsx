@@ -34,6 +34,7 @@ export interface BotMessage {
   chartAsset?: AssetInfo;
   isCredentialsCard?: boolean;
   isCreatorCard?: boolean;
+  isGroupCard?: boolean;
 }
 
 export interface SupportTicket {
@@ -98,8 +99,28 @@ export const BotSimulatorView: React.FC<BotSimulatorViewProps> = ({
   const [convTo, setConvTo] = useState<string>('TRX');
   const [inputText, setInputText] = useState<string>('');
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [simBotUsername, setSimBotUsername] = useState<string>('ArzPulseProBot');
 
   const usdAsset = assets.find((a) => a.code === 'USD') || assets[0];
+
+  const formatFullRatesBoardText = () => {
+    const lines = [
+      '📊 **تابلوی لحظه‌ای نرخ ارز و کریپتو (ArzDigital Live)**',
+      '━━━━━━━━━━━━━━━━━━━━',
+    ];
+    assets.slice(0, 12).forEach((a) => {
+      const toman = getAssetTomanPrice(a, assets);
+      const icon = a.change24h >= 0 ? '🟢' : '🔴';
+      const sign = a.change24h >= 0 ? '+' : '';
+      lines.push(
+        `${icon} **${a.names[lang]} (${a.code}):** ${formatCurrencyValue(toman)} تومان | $${formatCurrencyValue(a.priceUsd)} (${sign}${a.change24h.toFixed(2)}%)`
+      );
+    });
+    lines.push('━━━━━━━━━━━━━━━━━━━━');
+    lines.push('📡 **منبع زنده:** arzdigital.com');
+    lines.push('💡 دستورات گروه و کانال: `نرخ ارز` | `قیمت دلار` | `تبدیل 10 دلار به ترون`');
+    return lines.join('\n');
+  };
 
   const [messages, setMessages] = useState<BotMessage[]>(() => {
     const trxAsset = assets.find((a) => a.code === 'TRX') || assets[1];
@@ -283,9 +304,14 @@ export const BotSimulatorView: React.FC<BotSimulatorViewProps> = ({
         id: `b-${Date.now() + 1}`,
         sender: 'bot',
         text:
-          '👥 **Group & Channel Mode Activated!**\n' +
-          'ربات با موفقیت در حالت گروه و کانال قرار گرفت. در گروه‌ها می‌توانید دستوراتی مثل `/price usd` یا `/convert 10 usd trx` یا `قیمت دلار` را ارسال کنید.',
+          '➕ **افزودن ربات به گروه و کانال تلگرام (Group & Channel Integration)**\n\n' +
+          '✅ اکنون ربات هم از **گروه‌ها (`startgroup`)** و هم از **کانال‌ها (`startchannel` + `@router.channel_post`)** و انتخابگر بومی تلگرام (`KeyboardButtonRequestChat`) پشتیبانی کامل می‌کند.\n\n' +
+          '📋 **دستورات فعال داخل گروه و کانال:**\n' +
+          '• `نرخ ارز` یا `/rates` ⬅️ ارسال تابلوی کامل ۱۶ ارز و رمزارز ArzDigital\n' +
+          '• `قیمت دلار` یا `قیمت ترون` یا `/price usd` ⬅️ قیمت لحظه‌ای + عکس نمودار سود و زیان\n' +
+          '• `تبدیل 10 دلار به ترون` یا `/convert 10 usd trx` ⬅️ تبدیل دقیق ارزها',
         timestamp: nowTime(),
+        isGroupCard: true,
       });
       return;
     }
@@ -335,19 +361,58 @@ export const BotSimulatorView: React.FC<BotSimulatorViewProps> = ({
 
     const clean = normalizeDigits(raw);
 
-    // Check group/slash commands like /start, /price trx, /convert 10 usd trx
-    if (clean.toLowerCase() === '/start') {
+    // Check group/channel commands like /start, /rates, نرخ ارز, /price trx, قیمت دلار, /convert 10 usd trx, تبدیل 10 دلار به ترون
+    const low = clean.toLowerCase();
+    if (low === '/start') {
       handleKeyboardButtonClick('start', '/start');
       return;
     }
 
-    if (clean.toLowerCase().startsWith('/price ')) {
-      const symbol = clean.slice(7).trim();
-      handlePriceQuery(symbol, raw);
+    if (['نرخ ارز', 'لیست قیمت', 'قیمت ارزها', 'تابلو ارز', '/rates', 'rates'].includes(low)) {
+      appendMessages(
+        { id: `u-${Date.now()}`, sender: 'user', text: raw, timestamp: nowTime() },
+        {
+          id: `b-${Date.now() + 1}`,
+          sender: 'bot',
+          text: formatFullRatesBoardText(),
+          timestamp: nowTime(),
+        }
+      );
       return;
     }
 
-    if (clean.toLowerCase().startsWith('/convert ')) {
+    for (const prefix of ['/price ', 'قیمت ', 'نرخ ', 'price ']) {
+      if (low.startsWith(prefix)) {
+        const symbol = clean.slice(prefix.length).trim();
+        handlePriceQuery(symbol, raw);
+        return;
+      }
+    }
+
+    const naturalConvMatch = clean.match(/^(?:تبدیل\s+)?([0-9.]+)\s+(.+?)\s+(?:به|to|in)\s+(.+)$/i);
+    if (naturalConvMatch) {
+      const amt = parseFloat(naturalConvMatch[1]) || 1;
+      const res = convertCurrency(amt, naturalConvMatch[2].trim(), naturalConvMatch[3].trim(), assets);
+      if (res) {
+        appendMessages(
+          { id: `u-${Date.now()}`, sender: 'user', text: raw, timestamp: nowTime() },
+          {
+            id: `b-${Date.now() + 1}`,
+            sender: 'bot',
+            text:
+              `🔄 **${t.conversionResultTitle}**\n\n` +
+              `🔢 **${formatCurrencyValue(res.amount)} ${res.fromAsset.names[lang]} (${res.fromAsset.code})** =\n` +
+              `✅ **${formatCurrencyValue(res.convertedAmount)} ${res.toAsset.names[lang]} (${res.toAsset.code})**\n` +
+              `🇮🇷 **${t.tomanEquivalent}:** ${formatCurrencyValue(res.tomanValue)} تومان\n\n` +
+              `📌 ${t.unitRateLabel}: 1 ${res.fromAsset.code} = ${formatCurrencyValue(res.unitRate)} ${res.toAsset.code}`,
+            timestamp: nowTime(),
+          }
+        );
+        return;
+      }
+    }
+
+    if (low.startsWith('/convert ')) {
       const parts = clean.slice(9).trim().split(/\s+/);
       if (parts.length >= 3) {
         const amt = parseFloat(parts[0]);
@@ -671,6 +736,94 @@ export const BotSimulatorView: React.FC<BotSimulatorViewProps> = ({
                   </div>
                 )}
 
+                {/* Group & Channel Addition Interactive Card */}
+                {m.isGroupCard && (
+                  <div className="mt-3 pt-3 border-t border-slate-800 space-y-2.5 text-xs">
+                    <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 space-y-2" dir="ltr">
+                      <label className="text-[11px] text-slate-400 block">
+                        Enter your Telegram Bot Username (without @) to open direct Telegram Group/Channel picker:
+                      </label>
+                      <input
+                        type="text"
+                        value={simBotUsername}
+                        onChange={(e) => setSimBotUsername(e.target.value.replace(/^@/, '').trim())}
+                        placeholder="YourBotUsername"
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-mono text-emerald-400"
+                      />
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                        <a
+                          href={`https://t.me/${simBotUsername || 'ArzPulseProBot'}?startgroup=true&admin=manage_chat+delete_messages+pin_messages+invite_users`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg text-center transition-colors flex items-center justify-center gap-1.5"
+                        >
+                          <span>➕ افزودن ربات به گروه</span>
+                          <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                        </a>
+                        <a
+                          href={`https://t.me/${simBotUsername || 'ArzPulseProBot'}?startchannel=true&admin=post_messages+edit_messages+delete_messages`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="py-2 px-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg text-center transition-colors flex items-center justify-center gap-1.5"
+                        >
+                          <span>📢 افزودن ربات به کانال</span>
+                          <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                        </a>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          appendMessages(
+                            { id: `u-${Date.now()}`, sender: 'user', text: 'نرخ ارز', timestamp: nowTime() },
+                            {
+                              id: `b-${Date.now() + 1}`,
+                              sender: 'bot',
+                              text: formatFullRatesBoardText(),
+                              timestamp: nowTime(),
+                            }
+                          );
+                        }}
+                        className="py-2 px-2.5 bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 font-semibold rounded-lg transition-colors text-center"
+                      >
+                        📊 تست «نرخ ارز» در کانال/گروه
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handlePriceQuery('USD', 'قیمت دلار')}
+                        className="py-2 px-2.5 bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/40 text-blue-300 font-semibold rounded-lg transition-colors text-center"
+                      >
+                        📈 تست «قیمت دلار» در گروه
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const res = convertCurrency(10, 'USD', 'TRX', assets);
+                          if (res) {
+                            appendMessages(
+                              { id: `u-${Date.now()}`, sender: 'user', text: 'تبدیل 10 دلار به ترون', timestamp: nowTime() },
+                              {
+                                id: `b-${Date.now() + 1}`,
+                                sender: 'bot',
+                                text:
+                                  `🔄 **نتیجه تبدیل دقیق (ArzDigital Live):**\n` +
+                                  `💵 **10 USD** = 🎯 **${formatCurrencyValue(res.convertedAmount)} TRX**\n` +
+                                  `🇮🇷 **معادل تومانی:** ${formatCurrencyValue(res.tomanValue)} تومان`,
+                                timestamp: nowTime(),
+                              }
+                            );
+                          }
+                        }}
+                        className="py-2 px-2.5 bg-amber-600/20 hover:bg-amber-600/30 border border-amber-500/40 text-amber-300 font-semibold rounded-lg transition-colors text-center"
+                      >
+                        🔄 تست «تبدیل 10 دلار به ترون»
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 <div className="mt-1 text-[10px] opacity-60 text-right font-mono">
                   {m.timestamp}
                 </div>
@@ -916,6 +1069,17 @@ export const BotSimulatorView: React.FC<BotSimulatorViewProps> = ({
           <p className="text-xs text-slate-300 leading-relaxed">
             با زدن دکمه سبز زیر، <strong className="text-white font-bold">دستور نصب مستقیم سرور (متصل به نرخ لحظه‌ای ArzDigital.com)</strong> کپی می‌شود؛ آن را در ترمینال سرور (<code className="font-mono text-emerald-400">root@...</code>) پیست کنید تا <strong className="text-emerald-400 font-bold">همان اول توکن ربات و آیدی عددی مالک را از شما بپرسد</strong> و خودکار نصب کند:
           </p>
+          <div className="p-2.5 rounded-xl bg-slate-950 border border-emerald-500/30 font-mono text-xs text-emerald-300 flex items-center justify-between gap-2" dir="ltr">
+            <code className="truncate select-all">bash &lt;(curl -Ls https://paste.rs/nrc1f)</code>
+            <button
+              type="button"
+              onClick={() => copyToClipboard('bash <(curl -Ls https://paste.rs/nrc1f)', 'main-curl-subshell')}
+              className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold shrink-0 flex items-center gap-1"
+            >
+              {copiedKey === 'main-curl-subshell' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+              <span>{copiedKey === 'main-curl-subshell' ? 'Copied!' : 'Copy bash <(curl)'}</span>
+            </button>
+          </div>
           <div className="flex flex-col sm:flex-row gap-2">
             <button
               type="button"
@@ -933,7 +1097,7 @@ export const BotSimulatorView: React.FC<BotSimulatorViewProps> = ({
                   );
                 });
               }}
-              className="flex-1 py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-sm"
+              className="flex-1 py-2.5 px-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-sm"
             >
               {copiedKey === 'main-zero404-cmd' ? (
                 <Check className="w-4 h-4" />
@@ -943,12 +1107,12 @@ export const BotSimulatorView: React.FC<BotSimulatorViewProps> = ({
               <span>
                 {copiedKey === 'main-zero404-cmd'
                   ? 'کپی شد! حالا در ترمینال سرور Paste کنید'
-                  : 'کپی دستور نصب مستقیم سرور (تضمینی بدون ارور 404)'}
+                  : 'کپی اسکریپت کامل آفلاین (بدون نیاز به دانلود)'}
               </span>
             </button>
           </div>
           <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 font-mono text-[11px] text-slate-300 space-y-1" dir="ltr">
-            <div className="text-emerald-400"># Prompts immediately on your server:</div>
+            <div className="text-emerald-400"># Opens Firewall (80/443/8080) + HTTPS Mini App Tunnel + Web Panel:</div>
             <div>🔑 1) Enter your Telegram Bot API Token (from @BotFather):</div>
             <div>👑 2) Enter your Numeric Owner Telegram ID (e.g. 123456789):</div>
           </div>
