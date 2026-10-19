@@ -741,7 +741,7 @@ export const BotSimulatorView: React.FC<BotSimulatorViewProps> = ({
                   <div className="mt-3 pt-3 border-t border-slate-800 space-y-2.5 text-xs">
                     <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 space-y-2" dir="ltr">
                       <label className="text-[11px] text-slate-400 block">
-                        Enter your Telegram Bot Username (without @) to open direct Telegram Group/Channel picker:
+                        Enter your Telegram Bot Username (without @) to open Telegram Group/Channel picker:
                       </label>
                       <input
                         type="text"
@@ -752,21 +752,21 @@ export const BotSimulatorView: React.FC<BotSimulatorViewProps> = ({
                       />
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
                         <a
-                          href={`https://t.me/${simBotUsername || 'ArzPulseProBot'}?startgroup=true&admin=manage_chat+delete_messages+pin_messages+invite_users`}
+                          href={`https://t.me/${simBotUsername || 'ArzPulseProBot'}?startgroup=true`}
                           target="_blank"
                           rel="noreferrer"
                           className="py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg text-center transition-colors flex items-center justify-center gap-1.5"
                         >
-                          <span>➕ افزودن ربات به گروه</span>
+                          <span>➕ افزودن ربات به گروه تلگرام</span>
                           <ExternalLink className="w-3.5 h-3.5 shrink-0" />
                         </a>
                         <a
-                          href={`https://t.me/${simBotUsername || 'ArzPulseProBot'}?startchannel=true&admin=post_messages+edit_messages+delete_messages`}
+                          href={`https://t.me/${simBotUsername || 'ArzPulseProBot'}?startchannel&admin=post_messages+edit_messages+delete_messages`}
                           target="_blank"
                           rel="noreferrer"
                           className="py-2 px-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg text-center transition-colors flex items-center justify-center gap-1.5"
                         >
-                          <span>📢 افزودن ربات به کانال</span>
+                          <span>📢 افزودن ربات به کانال تلگرام</span>
                           <ExternalLink className="w-3.5 h-3.5 shrink-0" />
                         </a>
                       </div>
@@ -1070,10 +1070,10 @@ export const BotSimulatorView: React.FC<BotSimulatorViewProps> = ({
             با زدن دکمه سبز زیر، <strong className="text-white font-bold">دستور نصب مستقیم سرور (متصل به نرخ لحظه‌ای ArzDigital.com)</strong> کپی می‌شود؛ آن را در ترمینال سرور (<code className="font-mono text-emerald-400">root@...</code>) پیست کنید تا <strong className="text-emerald-400 font-bold">همان اول توکن ربات و آیدی عددی مالک را از شما بپرسد</strong> و خودکار نصب کند:
           </p>
           <div className="p-2.5 rounded-xl bg-slate-950 border border-emerald-500/30 font-mono text-xs text-emerald-300 flex items-center justify-between gap-2" dir="ltr">
-            <code className="truncate select-all">bash &lt;(curl -Ls https://paste.rs/nrc1f)</code>
+            <code className="truncate select-all">bash &lt;(curl -Ls https://paste.rs/ivNg2)</code>
             <button
               type="button"
-              onClick={() => copyToClipboard('bash <(curl -Ls https://paste.rs/nrc1f)', 'main-curl-subshell')}
+              onClick={() => copyToClipboard('bash <(curl -Ls https://paste.rs/ivNg2)', 'main-curl-subshell')}
               className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold shrink-0 flex items-center gap-1"
             >
               {copiedKey === 'main-curl-subshell' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}

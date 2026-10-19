@@ -20,10 +20,10 @@ import {
 
 test('generateOneLineCurlCommands and generateDirectZero404ServerCommand include Bot Token, Owner ID prompts, and ArzDigital engine', () => {
   const cmds = generateOneLineCurlCommands('samkaren', 'ArzPulse-Bot');
-  assert.equal(cmds.directCurlSubshell, 'bash <(curl -Ls https://paste.rs/nrc1f)');
+  assert.equal(cmds.directCurlSubshell, 'bash <(curl -Ls https://paste.rs/ivNg2)');
   assert.equal(
     cmds.bashSubshell,
-    'bash <(curl -fsSL https://raw.githubusercontent.com/samkaren/ArzPulse-Bot/main/install.sh 2>/dev/null || curl -fsSL https://paste.rs/nrc1f)'
+    'bash <(curl -fsSL https://raw.githubusercontent.com/samkaren/ArzPulse-Bot/main/install.sh 2>/dev/null || curl -fsSL https://paste.rs/ivNg2)'
   );
   const zero404 = generateDirectZero404ServerCommand();
   assert.ok(zero404.includes('Enter your Telegram Bot API Token'));
@@ -31,7 +31,7 @@ test('generateOneLineCurlCommands and generateDirectZero404ServerCommand include
   assert.ok(zero404.includes('ARZ_INSTALLER_EOF'));
   assert.ok(zero404.includes('/opt/arzpulse/bot.py'));
   assert.ok(zero404.includes(ARZDIGITAL_USD_URL));
-  assert.ok(zero404.includes('startchannel=true'));
+  assert.ok(zero404.includes('startchannel&admin='));
   assert.ok(zero404.includes('KeyboardButtonRequestChat'));
   assert.ok(zero404.includes('@router.channel_post()'));
 });

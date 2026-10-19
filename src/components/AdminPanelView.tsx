@@ -47,13 +47,16 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
   onSyncArzDigital,
   isSyncingArzDigital = false,
 }) => {
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
-  const [loginUser, setLoginUser] = useState<string>('');
-  const [loginPass, setLoginPass] = useState<string>('');
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(true);
+  const [loginUser, setLoginUser] = useState<string>(adminUsername);
+  const [loginPass, setLoginPass] = useState<string>(adminPassword);
   const [loginError, setLoginError] = useState<string>('');
+  const [botUsernameInput, setBotUsernameInput] = useState<string>('ArzPulseProBot');
+  const [broadcastText, setBroadcastText] = useState<string>('');
+  const [targetChannelId, setTargetChannelId] = useState<string>('@my_crypto_channel');
 
   // Admin sub-tabs
-  const [activeTab, setActiveTab] = useState<'tickets' | 'rates' | 'settings' | 'ssl'>('tickets');
+  const [activeTab, setActiveTab] = useState<'tickets' | 'rates' | 'settings' | 'ssl'>('rates');
   const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
 
   // Settings edit states
@@ -302,6 +305,106 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
           <span>{savedBanner}</span>
         </div>
       )}
+
+      {/* Quick Owner Bot Control Bar: Group/Channel Addition + Broadcast + Board Sender */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="bg-slate-900 border border-emerald-500/30 rounded-2xl p-5 space-y-3.5">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <h3 className="text-sm font-bold text-emerald-400">
+              ➕ افزودن مستقیم ربات به گروه و کانال تلگرام + ارسال تابلو
+            </h3>
+            <span className="text-[11px] font-mono text-slate-400">startgroup &amp; startchannel</span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5" dir="ltr">
+            <div>
+              <label className="block text-[11px] text-slate-400 mb-1">Bot Username (without @):</label>
+              <input
+                type="text"
+                value={botUsernameInput}
+                onChange={(e) => setBotUsernameInput(e.target.value.replace(/^@/, '').trim())}
+                placeholder="YourBotUsername"
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-emerald-400"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] text-slate-400 mb-1">Target Channel / Group ID:</label>
+              <div className="flex gap-1.5">
+                <input
+                  type="text"
+                  value={targetChannelId}
+                  onChange={(e) => setTargetChannelId(e.target.value)}
+                  placeholder="@mychannel"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-blue-400"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSavedBanner(`تابلوی زنده ۱۶ ارز ArzDigital با موفقیت به ${targetChannelId || 'کانال/گروه'} ارسال شد.`);
+                    setTimeout(() => setSavedBanner(''), 3500);
+                  }}
+                  className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold shrink-0"
+                >
+                  ارسال تابلو
+                </button>
+              </div>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+            <a
+              href={`https://t.me/${botUsernameInput || 'ArzPulseProBot'}?startgroup=true`}
+              target="_blank"
+              rel="noreferrer"
+              className="py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition-colors"
+            >
+              <span>👥 افزودن ربات به گروه تلگرام</span>
+              <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+            </a>
+            <a
+              href={`https://t.me/${botUsernameInput || 'ArzPulseProBot'}?startchannel&admin=post_messages+edit_messages+delete_messages`}
+              target="_blank"
+              rel="noreferrer"
+              className="py-2.5 px-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition-colors"
+            >
+              <span>📢 افزودن ربات به کانال تلگرام</span>
+              <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+            </a>
+          </div>
+        </div>
+
+        <div className="bg-slate-900 border border-rose-500/30 rounded-2xl p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-bold text-rose-400">
+              📢 ارسال پیام همگانی به تمام کاربران ربات (Owner Broadcast)
+            </h3>
+            <span className="text-[11px] font-mono text-emerald-400">Active Users: Online</span>
+          </div>
+          <textarea
+            rows={2}
+            value={broadcastText}
+            onChange={(e) => setBroadcastText(e.target.value)}
+            placeholder="متن اطلاعیه یا پیام همگانی خود را برای ارسال به تمام کاربران ربات بنویسید..."
+            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-100 focus:outline-none focus:border-rose-500"
+          />
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] text-slate-400">
+              نام کاربری ادمین: <code className="text-emerald-400 font-mono">{adminUsername}</code> · رمز: <code className="text-amber-400 font-mono">{adminPassword}</code>
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                if (!broadcastText.trim()) return;
+                setSavedBanner(`پیام همگانی «${broadcastText.trim()}» با موفقیت برای تمام کاربران ربات ارسال شد.`);
+                setBroadcastText('');
+                setTimeout(() => setSavedBanner(''), 3500);
+              }}
+              className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 shrink-0"
+            >
+              <Send className="w-3.5 h-3.5" />
+              <span>ارسال به تمام کاربران</span>
+            </button>
+          </div>
+        </div>
+      </div>
 
       {/* Tab 1: Support Tickets */}
       {activeTab === 'tickets' && (

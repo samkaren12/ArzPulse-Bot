@@ -152,8 +152,10 @@ TON_WALLET = "UQAozwWDvLXgp4XWS0t8Z9xYdmN5iJ76anD5XD3y74rdhQP-"
 TRON_WALLET = "TBgTK3Png5D467cvCnwfA3xdLvUgJbpAfy"
 ARZDIGITAL_SOURCE_URL = "https://arzdigital.com/currencies/united-states-dollar/"
 TUNNEL_FILE = "/opt/arzpulse/tunnel_url.txt"
+TUNNEL_LOG_FILE = "/opt/arzpulse/tunnel.log"
 USERS_FILE = "/opt/arzpulse/users.json"
 OVERRIDES_FILE = "/opt/arzpulse/overrides.json"
+BOT_USERNAME_CACHE = "ArzPulseBot"
 logging.basicConfig(level=logging.INFO)
 router = Router()
 class BotStates(StatesGroup):
@@ -163,8 +165,11 @@ class BotStates(StatesGroup):
  convert_second_asset = State()
  convert_amount = State()
  waiting_for_support_msg = State()
+ waiting_for_broadcast_msg = State()
+ waiting_for_target_chat = State()
 user_langs: Dict[int, str] = {}
 total_users = set()
+support_tickets: list = []
 def load_saved_users():
  global total_users
  try:
@@ -184,6 +189,14 @@ def save_user_id(uid: int):
  except Exception:
   pass
 def get_https_panel_url() -> str:
+ try:
+  if os.path.exists(TUNNEL_LOG_FILE):
+   with open(TUNNEL_LOG_FILE, "r", encoding="utf-8", errors="ignore") as f:
+    matches = re.findall(r"https://[-a-zA-Z0-9]+.trycloudflare.com", f.read())
+    if matches:
+     return matches[-1].strip().rstrip("/")
+ except Exception:
+  pass
  try:
   if os.path.exists(TUNNEL_FILE):
    with open(TUNNEL_FILE, "r", encoding="utf-8") as f:
@@ -420,11 +433,12 @@ def build_main_keyboard(user_id: int, chat_type: str = "private") -> ReplyKeyboa
  L = get_lang(user_id)
  panel_url = get_https_panel_url()
  is_private = (chat_type == "private")
+ has_https = is_private and panel_url.startswith("https://")
  rows = [
   [styled_btn(text=L["btn_price"], style="success"), styled_btn(text=L["btn_convert"], style="primary")],
   [
    styled_btn(text=L["btn_miniapp"], style="success", web_app=WebAppInfo(url=f"{panel_url}/miniapp"))
-   if (is_private and panel_url.startswith("https://"))
+   if has_https
    else styled_btn(text=L["btn_miniapp"], style="success"),
    styled_btn(text=L["btn_lang"], style="primary"),
   ],
@@ -432,7 +446,13 @@ def build_main_keyboard(user_id: int, chat_type: str = "private") -> ReplyKeyboa
   [styled_btn(text=L["btn_creator"], style="success"), styled_btn(text=L["btn_group"], style="primary")],
  ]
  if is_private and user_id == OWNER_ID:
-  rows.append([styled_btn(text=L["btn_owner"], style="danger")])
+  if has_https:
+   rows.append([
+    styled_btn(text="👑 وب‌پنل مدیریت ربات (ورود مستقیم)", style="danger", web_app=WebAppInfo(url=f"{panel_url}/admin?autologin=1")),
+    styled_btn(text=L["btn_owner"], style="primary"),
+   ])
+  else:
+   rows.append([styled_btn(text=L["btn_owner"], style="danger")])
  return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
 def build_group_channel_keyboard() -> ReplyKeyboardMarkup:
  group_rights = ChatAdministratorRights(
@@ -455,7 +475,7 @@ def build_group_channel_keyboard() -> ReplyKeyboardMarkup:
   can_restrict_members=False,
   can_promote_members=False,
   can_change_info=False,
-  can_invite_users=True,
+  can_invite_users=False,
  )
  btn_add_group = styled_btn(
   text="👥 انتخاب گروه و افزودن خودکار ربات",
@@ -463,9 +483,7 @@ def build_group_channel_keyboard() -> ReplyKeyboardMarkup:
   request_chat=KeyboardButtonRequestChat(
    request_id=101,
    chat_is_channel=False,
-   user_administrator_rights=group_rights,
    bot_administrator_rights=group_rights,
-   bot_is_member=True,
   ),
  )
  btn_add_channel = styled_btn(
@@ -474,9 +492,7 @@ def build_group_channel_keyboard() -> ReplyKeyboardMarkup:
   request_chat=KeyboardButtonRequestChat(
    request_id=102,
    chat_is_channel=True,
-   user_administrator_rights=channel_rights,
    bot_administrator_rights=channel_rights,
-   bot_is_member=True,
   ),
  )
  return ReplyKeyboardMarkup(
@@ -617,40 +633,75 @@ async def show_creator(message: Message, state: FSMContext):
  )
  kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🐙 مشاهده گیت‌هاب سازنده (GitHub)", url=GITHUB_URL)]])
  await message.answer(text, reply_markup=kb, parse_mode="HTML")
-@router.message(F.text.in_([v["btn_group"] for v in LANGS.values()]), StateFilter("*"))
+@router.message(Command("group", "channel", "add"), StateFilter("*"))
+@router.message(F.text.in_([v["btn_group"] for v in LANGS.values()] + ["➕ افزودن ربات به گروه و کانال", "➕ افزودن به گروه یا کانال"]), StateFilter("*"))
 async def show_group_info(message: Message, state: FSMContext, bot: Bot):
+ global BOT_USERNAME_CACHE
  await state.clear()
- me = await bot.get_me()
- bot_user = me.username or "ArzPulseBot"
- group_admin_url = f"https://t.me/{bot_user}?startgroup=true&admin=manage_chat+delete_messages+pin_messages+invite_users"
+ try:
+  me = await bot.get_me()
+  if me.username:
+   BOT_USERNAME_CACHE = me.username
+ except Exception:
+  pass
+ bot_user = BOT_USERNAME_CACHE
  group_normal_url = f"https://t.me/{bot_user}?startgroup=true"
- channel_admin_url = f"https://t.me/{bot_user}?startchannel=true&admin=post_messages+edit_messages+delete_messages"
+ group_admin_url = f"https://t.me/{bot_user}?startgroup=admin&admin=manage_chat+delete_messages+invite_users"
+ channel_admin_url = f"https://t.me/{bot_user}?startchannel&admin=post_messages+edit_messages+delete_messages"
  kb = InlineKeyboardMarkup(
   inline_keyboard=[
-   [InlineKeyboardButton(text="➕ افزودن ربات به گروه (Add to Group - Admin)", url=group_admin_url)],
-   [InlineKeyboardButton(text="📢 افزودن ربات به کانال (Add to Channel - Admin)", url=channel_admin_url)],
-   [InlineKeyboardButton(text="👥 افزودن معمولی به گروه (Member Mode)", url=group_normal_url)],
-   [InlineKeyboardButton(text="📊 تست ارسال تابلوی کامل نرخ ارزها", callback_data="send_live_board")],
+   [InlineKeyboardButton(text="➕ افزودن ربات به گروه تلگرام (انتخاب گروه)", url=group_normal_url)],
+   [InlineKeyboardButton(text="🛡 افزودن ربات به گروه (با دسترسی ادمین)", url=group_admin_url)],
+   [InlineKeyboardButton(text="📢 افزودن ربات به کانال تلگرام (انتخاب کانال)", url=channel_admin_url)],
+   [InlineKeyboardButton(text="📡 ارسال تابلوی نرخ ارز به آیدی کانال/گروه", callback_data="send_to_target_chat")],
+   [InlineKeyboardButton(text="📊 تست ارسال تابلوی کامل نرخ ارزها در همین چت", callback_data="send_live_board")],
   ]
  )
  info_text = (
-  f"➕ <b>افزودن ربات @{bot_user} به گروه یا کانال تلگرام</b>\n\n"
-  f"✅ <b>روش ۱ (از طریق کیبورد رنگی پایین صفحه):</b>\n"
-  f"کافیست روی دکمه سبز <b>«👥 انتخاب گروه و افزودن خودکار ربات»</b> یا دکمه آبی <b>«📢 انتخاب کانال و افزودن خودکار ربات»</b> در کیبورد پایین صفحه بزنید تا لیست گروه‌ها یا کانال‌های شما باز شود و ربات خودکار اضافه گردد!\n\n"
-  f"✅ <b>روش ۲ (از طریق دکمه‌های شیشه‌ای زیر):</b>\n"
-  f"• <b>لینک مستقیم گروه:</b>\n{group_admin_url}\n"
-  f"• <b>لینک مستقیم کانال:</b>\n{channel_admin_url}\n\n"
-  f"📋 <b>دستورات قابل استفاده داخل گروه و کانال:</b>\n"
-  f"• <code>نرخ ارز</code> یا <code>/rates</code> ⬅️ ارسال تابلوی کامل ۱۶ ارز و رمزارز ArzDigital\n"
+  f"➕ <b>افزودن ربات @{bot_user} به گروه و کانال تلگرام</b>\n\n"
+  f"1️⃣ <b>روش اول (دکمه‌های شیشه‌ای زیر):</b>\n"
+  f"• برای افزودن به <b>گروه</b> روی دکمه اول یا دوم بزنید.\n"
+  f"• برای افزودن به <b>کانال</b> روی دکمه سوم (📢 افزودن ربات به کانال) بزنید.\n\n"
+  f"2️⃣ <b>روش دوم (کیبورد رنگی پایین صفحه):</b>\n"
+  f"روی دکمه سبز <b>«👥 انتخاب گروه»</b> یا دکمه آبی <b>«📢 انتخاب کانال»</b> در پایین صفحه بزنید تا لیست گروه‌ها و کانال‌های شما باز شود!\n\n"
+  f"📋 <b>دستورات فعال داخل گروه و کانال:</b>\n"
+  f"• <code>نرخ ارز</code> یا <code>/rates</code> ⬅️ تابلوی کامل ۱۶ ارز و رمزارز ArzDigital\n"
   f"• <code>قیمت دلار</code> یا <code>قیمت ترون</code> یا <code>/price usd</code> ⬅️ قیمت + عکس نمودار سود و زیان\n"
   f"• <code>تبدیل 10 دلار به ترون</code> یا <code>/convert 10 usd trx</code> ⬅️ تبدیل دقیق ارزها"
  )
  if message.chat.type == "private":
-  await message.answer(
-   "👇 از کیبورد رنگی پایین صفحه، گروه یا کانال خود را انتخاب کنید:",
-   reply_markup=build_group_channel_keyboard(),
-  )
+  try:
+   await message.answer(
+    "👇 از کیبورد پایین صفحه یا دکمه‌های شیشه‌ای زیر، گروه یا کانال خود را انتخاب کنید:",
+    reply_markup=build_group_channel_keyboard(),
+   )
+  except Exception:
+   pass
  await message.answer(info_text, reply_markup=kb, parse_mode="HTML")
+@router.callback_query(F.data == "send_to_target_chat")
+async def cb_ask_target_chat(callback: CallbackQuery, state: FSMContext):
+ await callback.answer()
+ await state.set_state(BotStates.waiting_for_target_chat)
+ if callback.message:
+  await callback.message.answer(
+   "📡 <b>ارسال تابلوی زنده نرخ ارز به کانال یا گروه:</b>\n\n"
+   "لطفاً ابتدا ربات را در کانال یا گروه خود ادمین کنید، سپس <b>یوزرنیم کانال/گروه</b> (مثلاً <code>@mychannel</code>) یا <b>آیدی عددی چت</b> را ارسال کنید:",
+   parse_mode="HTML",
+  )
+@router.message(BotStates.waiting_for_target_chat)
+async def handle_target_chat_send(message: Message, state: FSMContext, bot: Bot):
+ await state.clear()
+ target = (message.text or "").strip()
+ if not target:
+  return
+ await refresh_live_prices()
+ board_msg = format_full_rates_board()
+ try:
+  chat_id: Any = int(target) if target.lstrip("-").isdigit() else (target if target.startswith("@") else f"@{target}")
+  await bot.send_message(chat_id, board_msg, parse_mode="HTML")
+  await message.answer(f"✅ تابلوی زنده نرخ ارز با موفقیت به <code>{target}</code> ارسال شد!", parse_mode="HTML")
+ except Exception as e:
+  await message.answer(f"❌ خطا در ارسال به <code>{target}</code>: مطمئن شوید ربات در آن کانال/گروه عضو و ادمین است.\n<code>{e}</code>", parse_mode="HTML")
 @router.message(F.chat_shared, StateFilter("*"))
 async def handle_chat_shared(message: Message, bot: Bot):
  shared = message.chat_shared
@@ -713,43 +764,85 @@ async def show_miniapp_link(message: Message, state: FSMContext):
   buttons.append([InlineKeyboardButton(text="📱 باز کردن مینی‌اپ داخل تلگرام (Mini App)", web_app=WebAppInfo(url=f"{https_url}/miniapp"))])
  if https_url.startswith("https://"):
   buttons.append([InlineKeyboardButton(text="🌐 باز کردن مینی‌اپ در مرورگر (HTTPS)", url=f"{https_url}/miniapp")])
- buttons.append([InlineKeyboardButton(text="🖥 باز کردن مینی‌اپ (لینک مستقیم سرور Port 80)", url=f"{http_url}/miniapp")])
- buttons.append([InlineKeyboardButton(text="⚡ باز کردن مینی‌اپ (Port 8080)", url=f"{http_url}:8080/miniapp")])
+ buttons.append([InlineKeyboardButton(text="🖥 باز کردن مینی‌اپ (Port 80)", url=f"{http_url}/miniapp")])
  kb = InlineKeyboardMarkup(inline_keyboard=buttons)
  text = (
   f"🚀 <b>مینی‌اپ و پنل پیشرفته ارزدیجیتال (ArzPulse Mini App)</b>\n\n"
   f"🔹 <b>لینک HTTPS (مخصوص مینی‌اپ تلگرام):</b>\n{https_url}/miniapp\n\n"
-  f"🔹 <b>لینک مستقیم سرور (Port 80):</b>\n{http_url}/miniapp\n\n"
-  f"🔹 <b>لینک پورت 8080:</b>\n{http_url}:8080/miniapp\n\n"
-  f"👇 برای ورود فوری روی یکی از دکمه‌های زیر کلیک کنید:"
+  f"👇 برای ورود فوری روی دکمه زیر کلیک کنید:"
  )
  await message.answer(text, reply_markup=kb, parse_mode="HTML")
-@router.message(F.text.in_([v["btn_owner"] for v in LANGS.values()]), StateFilter("*"))
+@router.message(Command("admin", "panel"), StateFilter("*"))
+@router.message(F.text.in_([v["btn_owner"] for v in LANGS.values()] + ["👑 پنل مدیریت و اطلاعات ورود وب", "👑 وب‌پنل مدیریت ربات (ورود مستقیم)"]), StateFilter("*"))
 async def show_owner_panel(message: Message, state: FSMContext):
  await state.clear()
- if get_uid(message) != OWNER_ID:
+ uid = get_uid(message)
+ if uid != OWNER_ID:
+  await message.answer(
+   f"🔒 <b>این بخش مخصوص مالک ربات است.</b>\nآیدی عددی شما: <code>{uid}</code>\nدر صورت تمایل از طریق <code>sudo arz</code> گزینه 6 آیدی مالک را تغییر دهید.",
+   parse_mode="HTML",
+  )
   return
  https_url = get_https_panel_url()
  http_url = get_http_direct_url()
+ admin_auto_https = f"{https_url}/admin?autologin=1"
+ admin_auto_http = f"{http_url}/admin?autologin=1"
  buttons = []
  if https_url.startswith("https://") and message.chat.type == "private":
-  buttons.append([InlineKeyboardButton(text="👑 ورود مستقیم به وب‌پنل مدیریت (HTTPS Auto-Login)", web_app=WebAppInfo(url=f"{https_url}/admin?u={ADMIN_USERNAME}&p={ADMIN_PASSWORD}"))])
+  buttons.append([InlineKeyboardButton(text="👑 باز کردن وب‌پنل مدیریت داخل تلگرام (ورود خودکار)", web_app=WebAppInfo(url=admin_auto_https))])
  if https_url.startswith("https://"):
-  buttons.append([InlineKeyboardButton(text="🌐 باز کردن وب‌پنل در مرورگر (HTTPS)", url=f"{https_url}/admin?u={ADMIN_USERNAME}&p={ADMIN_PASSWORD}")])
- buttons.append([InlineKeyboardButton(text="🖥 ورود به وب‌پنل مدیریت (سرور Port 80)", url=f"{http_url}/admin?u={ADMIN_USERNAME}&p={ADMIN_PASSWORD}")])
- buttons.append([InlineKeyboardButton(text="⚡ ورود به وب‌پنل مدیریت (Port 8080)", url=f"{http_url}:8080/admin?u={ADMIN_USERNAME}&p={ADMIN_PASSWORD}")])
+  buttons.append([InlineKeyboardButton(text="🌐 باز کردن وب‌پنل مدیریت در مرورگر (HTTPS)", url=admin_auto_https)])
+ buttons.append([InlineKeyboardButton(text="🖥 لینک مستقیم وب‌پنل روی آی‌پی سرور", url=admin_auto_http)])
+ buttons.append([
+  InlineKeyboardButton(text="📢 ارسال پیام همگانی", callback_data="owner_broadcast"),
+  InlineKeyboardButton(text="🔄 بروزرسانی از ArzDigital", callback_data="owner_sync_rates"),
+ ])
+ buttons.append([
+  InlineKeyboardButton(text="📡 ارسال تابلو به کانال/گروه", callback_data="send_to_target_chat"),
+  InlineKeyboardButton(text="📊 تابلوی کامل نرخ‌ها", callback_data="send_live_board"),
+ ])
  kb = InlineKeyboardMarkup(inline_keyboard=buttons)
  text = (
-  f"👑 <b>پنل مدیریت اختصاصی مالک (Owner Web Admin Console)</b>\n\n"
+  f"👑 <b>وب‌پنل مدیریت اختصاصی مالک ربات (Owner Web Admin Console)</b>\n\n"
   f"👥 <b>کاربران فعال ربات:</b> <code>{len(total_users) or 1}</code>\n"
+  f"🛟 <b>تیکت‌های پشتیبانی:</b> <code>{len(support_tickets)}</code>\n"
   f"👤 <b>نام کاربری پنل (Username):</b> <code>{ADMIN_USERNAME}</code>\n"
   f"🔑 <b>رمز عبور پنل (Password):</b> <code>{ADMIN_PASSWORD}</code>\n\n"
-  f"🌐 <b>آدرس HTTPS وب‌پنل:</b>\n{https_url}/admin\n\n"
-  f"🖥 <b>آدرس مستقیم آی‌پی سرور:</b>\n{http_url}/admin\n{http_url}:8080/admin\n\n"
+  f"🔒 <b>لینک ورود خودکار HTTPS وب‌پنل (بدون نیاز به رمز):</b>\n{admin_auto_https}\n\n"
   f"🛠 <b>دستور مدیریت سرور:</b> <code>sudo arz</code>\n\n"
-  f"👇 با کلیک روی دکمه‌های زیر مستقیماً وارد پنل مدیریت شوید:"
+  f"👇 روی دکمه اول بزنید تا وب‌پنل مدیریت ربات مستقیماً داخل تلگرام باز شود:"
  )
  await message.answer(text, reply_markup=kb, parse_mode="HTML")
+@router.callback_query(F.data == "owner_sync_rates")
+async def cb_owner_sync_rates(callback: CallbackQuery):
+ await callback.answer("⏳ در حال بروزرسانی نرخ‌ها از ArzDigital.com...")
+ await refresh_live_prices()
+ if callback.message:
+  await callback.message.answer(f"✅ تمامی نرخ‌ها از ArzDigital.com بروزرسانی شدند!\n\n{format_full_rates_board()}", parse_mode="HTML")
+@router.callback_query(F.data == "owner_broadcast")
+async def cb_owner_broadcast(callback: CallbackQuery, state: FSMContext):
+ await callback.answer()
+ if callback.from_user.id != OWNER_ID:
+  return
+ await state.set_state(BotStates.waiting_for_broadcast_msg)
+ if callback.message:
+  await callback.message.answer("📢 متن پیام همگانی خود را بنویسید تا برای تمام کاربران ربات ارسال شود:")
+@router.message(BotStates.waiting_for_broadcast_msg)
+async def handle_owner_broadcast_msg(message: Message, state: FSMContext, bot: Bot):
+ await state.clear()
+ if get_uid(message) != OWNER_ID:
+  return
+ msg = (message.text or "").strip()
+ if not msg:
+  return
+ sent = 0
+ for uid in (set(total_users) | {OWNER_ID}):
+  try:
+   await bot.send_message(uid, f"📢 <b>اطلاعیه مدیریت ربات:</b>\n\n{msg}", parse_mode="HTML")
+   sent += 1
+  except Exception:
+   pass
+ await message.answer(f"✅ پیام همگانی شما با موفقیت به <b>{sent}</b> کاربر ارسال شد!", parse_mode="HTML")
 def compute_pair_rate(c1: str, c2: str) -> float:
  if c1 == "IRT" or c2 == "IRT":
   return ASSETS_DB[c1]["toman"] / ASSETS_DB[c2]["toman"]
@@ -923,18 +1016,29 @@ async def handle_conv_amount(message: Message, state: FSMContext):
 async def handle_support_msg(message: Message, state: FSMContext, bot: Bot):
  await state.clear()
  uid = get_uid(message)
+ sender_name = message.from_user.full_name if message.from_user else "Telegram User"
+ txt = (message.text or "").strip()
+ if txt:
+  support_tickets.append({"id": len(support_tickets) + 1, "user_id": uid, "name": sender_name, "message": txt, "reply": ""})
  await message.answer(get_lang(uid)["support_ok"])
  try:
-  sender_name = message.from_user.full_name if message.from_user else "User"
-  await bot.send_message(OWNER_ID, f"📩 <b>New Support Message from {sender_name} (ID: <code>{uid}</code>):</b>\n\n{message.text}", parse_mode="HTML")
+  await bot.send_message(OWNER_ID, f"📩 <b>New Support Message from {sender_name} (ID: <code>{uid}</code>):</b>\n\n{txt}", parse_mode="HTML")
  except Exception:
   pass
 @router.message()
 async def fallback_asset_lookup(message: Message):
  await handle_natural_text_command(message)
 async def api_rates(request):
+ global BOT_USERNAME_CACHE
  if request.query.get("sync") == "1":
   await refresh_live_prices()
+ if BOT_USERNAME_CACHE == "ArzPulseBot":
+  try:
+   me = await request.app["bot"].get_me()
+   if me.username:
+    BOT_USERNAME_CACHE = me.username
+  except Exception:
+   pass
  rates_list = [
   {"code": k, "name": v.get("name", k), "toman": v["toman"], "usd": v["price"], "change": v["change"]}
   for k, v in ASSETS_DB.items()
@@ -945,11 +1049,22 @@ async def api_rates(request):
   "usersCount": max(1, len(total_users)),
   "serverIp": SERVER_IP,
   "tunnelUrl": get_https_panel_url(),
+  "botUsername": BOT_USERNAME_CACHE,
+  "ownerId": OWNER_ID,
+  "tickets": list(reversed(support_tickets[-15:])),
  })
 async def api_override(request):
  body = await request.json()
  if body.get("username") != ADMIN_USERNAME or body.get("password") != ADMIN_PASSWORD:
   return web.json_response({"ok": False}, status=403)
+ if body.get("reset"):
+  try:
+   if os.path.exists(OVERRIDES_FILE):
+    os.remove(OVERRIDES_FILE)
+  except Exception:
+   pass
+  await refresh_live_prices()
+  return web.json_response({"ok": True})
  code = body.get("code", "USD")
  toman, usd = float(body.get("toman", 262400)), float(body.get("usd", 1.0))
  ov = {}
@@ -971,11 +1086,44 @@ async def api_support(request):
  msg = (body.get("message") or "").strip()
  if not msg:
   return web.json_response({"ok": False}, status=400)
+ support_tickets.append({"id": len(support_tickets) + 1, "user_id": OWNER_ID, "name": "کاربر مینی‌اپ", "message": msg, "reply": ""})
  try:
   await request.app["bot"].send_message(OWNER_ID, f"📩 <b>پیام پشتیبانی از مینی‌اپ:</b>\n\n{msg}", parse_mode="HTML")
  except Exception:
   pass
  return web.json_response({"ok": True})
+async def api_reply_ticket(request):
+ body = await request.json()
+ if body.get("username") != ADMIN_USERNAME or body.get("password") != ADMIN_PASSWORD:
+  return web.json_response({"ok": False}, status=403)
+ tid = int(body.get("id", 0))
+ reply_txt = (body.get("reply") or "").strip()
+ if not reply_txt:
+  return web.json_response({"ok": False}, status=400)
+ for tk in support_tickets:
+  if tk["id"] == tid:
+   tk["reply"] = reply_txt
+   try:
+    await request.app["bot"].send_message(tk["user_id"], f"👑 <b>پاسخ پشتیبانی مدیریت ربات:</b>\n\n{reply_txt}", parse_mode="HTML")
+   except Exception:
+    pass
+   break
+ return web.json_response({"ok": True})
+async def api_send_board(request):
+ body = await request.json()
+ if body.get("username") != ADMIN_USERNAME or body.get("password") != ADMIN_PASSWORD:
+  return web.json_response({"ok": False}, status=403)
+ target = (body.get("target") or "").strip()
+ if not target:
+  return web.json_response({"ok": False, "error": "آیدی کانال یا گروه خالی است"}, status=400)
+ await refresh_live_prices()
+ board_msg = format_full_rates_board()
+ try:
+  chat_id: Any = int(target) if target.lstrip("-").isdigit() else (target if target.startswith("@") else f"@{target}")
+  await request.app["bot"].send_message(chat_id, board_msg, parse_mode="HTML")
+  return web.json_response({"ok": True})
+ except Exception as e:
+  return web.json_response({"ok": False, "error": str(e)}, status=400)
 async def api_broadcast(request):
  body = await request.json()
  if body.get("username") != ADMIN_USERNAME or body.get("password") != ADMIN_PASSWORD:
@@ -994,33 +1142,32 @@ WEB_HTML = """<!doctype html>
 <html lang="fa" dir="rtl">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>ArzPulse Pro — مینی‌اپ و وب‌پنل مدیریت (ArzDigital Live)</title>
+<title>ArzPulse Pro — مینی‌اپ و وب‌پنل مدیریت ربات (ArzDigital Live)</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
-:root{--bg:#050816;--card:rgba(15,23,42,0.9);--border:rgba(56,189,248,0.24);--emerald:#10b981;--blue:#3b82f6;--rose:#f43f5e;--text:#f8fafc;--muted:#94a3b8}
+:root{--bg:#050816;--card:rgba(15,23,42,0.92);--border:rgba(56,189,248,0.24);--emerald:#10b981;--blue:#3b82f6;--rose:#f43f5e;--text:#f8fafc;--muted:#94a3b8}
 *{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,-apple-system,Segoe UI,Tahoma,sans-serif}
-body{background:radial-gradient(circle at 15% 15%,rgba(16,185,129,0.16),transparent 40%),radial-gradient(circle at 85% 20%,rgba(59,130,246,0.16),transparent 45%),var(--bg);color:var(--text);min-height:100vh;padding:14px}
+body{background:radial-gradient(circle at 15% 15%,rgba(16,185,129,0.16),transparent 40%),radial-gradient(circle at 85% 20%,rgba(59,130,246,0.16),transparent 45%),var(--bg);color:var(--text);min-height:100vh;padding:12px}
 .container{max-width:1100px;margin:0 auto}
-.header{background:var(--card);backdrop-filter:blur(14px);border:1px solid var(--border);border-radius:18px;padding:16px 20px;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px;box-shadow:0 14px 36px rgba(0,0,0,0.45)}
+.header{background:var(--card);backdrop-filter:blur(14px);border:1px solid var(--border);border-radius:18px;padding:15px 18px;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;margin-bottom:16px;box-shadow:0 14px 36px rgba(0,0,0,0.45)}
 .brand{display:flex;align-items:center;gap:12px}
-.badge-icon{width:44px;height:44px;border-radius:13px;background:linear-gradient(135deg,#10b981,#2563eb);display:flex;align-items:center;justify-content:center;font-size:21px;box-shadow:0 0 20px rgba(16,185,129,0.4)}
+.badge-icon{width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,#10b981,#2563eb);display:flex;align-items:center;justify-content:center;font-size:20px}
 .nav{display:flex;gap:8px;flex-wrap:wrap}
-.btn{border:1px solid rgba(255,255,255,0.14);background:#1e293b;color:#fff;padding:9px 14px;border-radius:11px;font-size:12.5px;font-weight:700;cursor:pointer;transition:.2s;display:inline-flex;align-items:center;gap:6px}
-.btn:hover{transform:translateY(-2px);border-color:var(--blue)}
+.btn{border:1px solid rgba(255,255,255,0.14);background:#1e293b;color:#fff;padding:9px 13px;border-radius:11px;font-size:12.5px;font-weight:700;cursor:pointer;transition:.2s;display:inline-flex;align-items:center;gap:6px;text-decoration:none}
+.btn:hover{transform:translateY(-1px);border-color:var(--blue)}
 .btn-p{background:linear-gradient(135deg,#2563eb,#1d4ed8);border-color:#3b82f6}
 .btn-s{background:linear-gradient(135deg,#059669,#10b981);border-color:#34d399}
 .btn-d{background:linear-gradient(135deg,#e11d48,#f43f5e);border-color:#fb7185}
-.grid-2{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:16px;margin-bottom:18px}
-.grid-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(225px,1fr));gap:12px}
-.card{background:var(--card);border:1px solid rgba(148,163,184,0.18);border-radius:16px;padding:16px;box-shadow:0 10px 28px rgba(0,0,0,0.35);transition:.2s}
-.card:hover{border-color:rgba(56,189,248,0.42)}
-.input,select,textarea{width:100%;background:#020617;border:1px solid rgba(148,163,184,0.28);color:#fff;padding:10px 12px;border-radius:11px;font-size:13.5px;outline:none;margin-top:5px}
-.res-box{margin-top:12px;padding:14px;border-radius:13px;background:linear-gradient(135deg,rgba(16,185,129,0.15),rgba(37,99,235,0.15));border:1px solid rgba(16,185,129,0.4);text-align:center}
+.grid-2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;margin-bottom:16px}
+.grid-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:11px}
+.card{background:var(--card);border:1px solid rgba(148,163,184,0.18);border-radius:16px;padding:15px;box-shadow:0 10px 28px rgba(0,0,0,0.35)}
+.input,select,textarea{width:100%;background:#020617;border:1px solid rgba(148,163,184,0.28);color:#fff;padding:9px 11px;border-radius:10px;font-size:13px;outline:none;margin-top:5px}
+.res-box{margin-top:11px;padding:13px;border-radius:12px;background:linear-gradient(135deg,rgba(16,185,129,0.15),rgba(37,99,235,0.15));border:1px solid rgba(16,185,129,0.4);text-align:center}
 .up{color:#34d399;background:rgba(16,185,129,0.15);padding:3px 8px;border-radius:7px;font-size:11.5px;font-weight:700}
 .down{color:#fb7185;background:rgba(244,63,94,0.15);padding:3px 8px;border-radius:7px;font-size:11.5px;font-weight:700}
 .mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;direction:ltr;display:inline-block}
 .hidden{display:none!important}
-.wbox{background:#020617;border:1px solid rgba(148,163,184,0.2);padding:9px 11px;border-radius:10px;font-size:11.5px;word-break:break-all;display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:7px}
+.wbox{background:#020617;border:1px solid rgba(148,163,184,0.2);padding:8px 10px;border-radius:10px;font-size:11.5px;word-break:break-all;display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:6px}
 </style>
 </head>
 <body>
@@ -1029,14 +1176,26 @@ body{background:radial-gradient(circle at 15% 15%,rgba(16,185,129,0.16),transpar
  <div class="brand">
    <div class="badge-icon">💎</div>
    <div>
-  <h1 style="font-size:18px;font-weight:800">ArzPulse Pro — مینی‌اپ و وب‌پنل زنده ارزدیجیتال</h1>
-  <p style="font-size:11.5px;color:var(--muted);margin-top:2px">متصل به نرخ لحظه‌ای ArzDigital.com • مدیریت سرور: <span class="mono" style="color:#34d399">sudo arz</span></p>
+  <h1 style="font-size:17px;font-weight:800">ArzPulse Pro — مینی‌اپ و وب‌پنل مدیریت ربات</h1>
+  <p style="font-size:11.5px;color:var(--muted);margin-top:2px">متصل به نرخ زنده ArzDigital.com • ربات: <span id="hdrBotUser" class="mono" style="color:#34d399">@__BOT_USER__</span></p>
    </div>
  </div>
  <div class="nav">
-   <button class="btn btn-p" onclick="switchView('miniapp')">🚀 مینی‌اپ و تبدیل ارز</button>
-   <button class="btn btn-d" onclick="switchView('admin')">👑 پنل مدیریت مالک</button>
+   <button class="btn btn-p" id="tabMiniBtn" onclick="switchView('miniapp')">🚀 مینی‌اپ و تبدیل ارز</button>
+   <button class="btn btn-d" id="tabAdminBtn" onclick="switchView('admin')">👑 وب‌پنل مدیریت ربات (مالک)</button>
    <button class="btn btn-s" id="syncBtn" onclick="syncNow()">🔄 بروزرسانی زنده</button>
+ </div>
+  </div>
+  <div class="card" style="margin-bottom:16px;border-color:rgba(16,185,129,0.35)">
+ <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px">
+   <div>
+  <h2 style="font-size:14px;color:#34d399">➕ افزودن مستقیم ربات به گروه و کانال تلگرام</h2>
+  <p style="font-size:11.5px;color:var(--muted);margin-top:2px">با کلیک روی دکمه‌های روبرو، لیست گروه‌ها یا کانال‌های تلگرام شما باز شده و ربات خودکار اضافه می‌شود:</p>
+   </div>
+   <div style="display:flex;gap:8px;flex-wrap:wrap">
+  <button class="btn btn-s" onclick="addBotToGroup()">👥 افزودن ربات به گروه تلگرام</button>
+  <button class="btn btn-p" onclick="addBotToChannel()">📢 افزودن ربات به کانال تلگرام</button>
+   </div>
  </div>
   </div>
   <div id="viewMiniApp">
@@ -1050,7 +1209,7 @@ body{background:radial-gradient(circle at 15% 15%,rgba(16,185,129,0.16),transpar
     <div><label style="font-size:11.5px;color:var(--muted)">به ارز مقصد:</label><select id="convTo" onchange="runConvert()"></select></div>
   </div>
   <div class="res-box">
-    <div id="convResultMain" class="mono" style="font-size:20px;font-weight:800;color:#34d399">1 USD = 3.0120 TRX</div>
+    <div id="convResultMain" class="mono" style="font-size:19px;font-weight:800;color:#34d399">1 USD = 3.0120 TRX</div>
     <div id="convResultToman" style="font-size:12.5px;color:#cbd5e1;margin-top:5px">معادل تومانی: 262,400 تومان</div>
     <div id="convResultUnit" class="mono" style="font-size:11px;color:var(--muted);margin-top:3px">1 USD = 3.0120 TRX</div>
   </div>
@@ -1071,7 +1230,7 @@ body{background:radial-gradient(circle at 15% 15%,rgba(16,185,129,0.16),transpar
   </div>
    </div>
  </div>
- <div class="card" style="margin-bottom:18px">
+ <div class="card" style="margin-bottom:16px">
    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px">
   <h2 style="font-size:15px">💰 قیمت لحظه‌ای ارزها و رمزارزها (کلیک برای نمودار)</h2>
   <input id="searchBox" class="input" style="max-width:240px;margin-top:0" placeholder="🔍 جستجو (دلار، ترون، TON...)" oninput="renderCards()">
@@ -1086,26 +1245,28 @@ body{background:radial-gradient(circle at 15% 15%,rgba(16,185,129,0.16),transpar
  </div>
   </div>
   <div id="viewAdmin" class="hidden">
- <div id="adminLoginCard" class="card" style="max-width:440px;margin:24px auto">
+ <div id="adminLoginCard" class="card hidden" style="max-width:440px;margin:20px auto">
    <h2 style="font-size:17px;color:#fb7185;margin-bottom:6px">🔐 ورود به وب‌پنل مدیریت مالک</h2>
-   <p style="font-size:12px;color:var(--muted);margin-bottom:12px">نام کاربری و رمز عبور نمایش داده شده در دکمه «👑 مدیریت مالک» ربات را وارد کنید:</p>
    <label style="font-size:11.5px;color:var(--muted)">نام کاربری (Username):</label>
    <input id="loginUser" class="input mono" value="__ADMIN_USER__">
-   <div style="margin-top:10px"><label style="font-size:11.5px;color:var(--muted)">رمز عبور (Password):</label><input id="loginPass" type="password" class="input mono" placeholder="••••••••••••"></div>
+   <div style="margin-top:10px"><label style="font-size:11.5px;color:var(--muted)">رمز عبور (Password):</label><input id="loginPass" type="text" class="input mono" value="__ADMIN_PASS__"></div>
    <div id="loginErr" style="color:#fb7185;font-size:12px;margin:8px 0"></div>
    <button class="btn btn-d" style="width:100%;justify-content:center;padding:11px;margin-top:6px" onclick="doAdminLogin()">ورود به کنسول مدیریت مالک</button>
  </div>
- <div id="adminDashContent" class="hidden">
+ <div id="adminDashContent">
    <div class="grid-2">
   <div class="card">
-    <h2 style="font-size:15px;color:#34d399;margin-bottom:10px">👑 وضعیت سرور و اطلاعات مالک</h2>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+   <h2 style="font-size:15px;color:#34d399">👑 وضعیت ربات، سرور و اطلاعات مالک</h2>
+   <span class="up">فعال (Online)</span>
+    </div>
     <div style="font-size:12.5px;line-height:1.95">
+   <div>🤖 یوزرنیم ربات تلگرام: <b id="statBotUser" class="mono" style="color:#38bdf8">@__BOT_USER__</b></div>
    <div>👥 کاربران ثبت‌شده ربات: <b id="statUsers" class="mono" style="color:#34d399">1</b></div>
+   <div>🔒 آدرس HTTPS وب‌پنل و مینی‌اپ: <b id="statTunnel" class="mono" style="color:#f59e0b">-</b></div>
    <div>🖥 آدرس مستقیم سرور: <b id="statIp" class="mono" style="color:#60a5fa">-</b></div>
-   <div>🔒 لینک HTTPS مینی‌اپ: <b id="statTunnel" class="mono" style="color:#f59e0b">-</b></div>
-   <div>👤 نام کاربری ادمین: <b class="mono" style="color:#34d399">__ADMIN_USER__</b></div>
-   <div>🔑 رمز عبور ادمین: <b class="mono" style="color:#fbbf24">__ADMIN_PASS__</b></div>
-   <div>🛠 دستور مدیریت سرور: <code class="mono" style="color:#fb7185">sudo arz</code></div>
+   <div>👤 نام کاربری ادمین: <b class="mono" style="color:#34d399">__ADMIN_USER__</b> | 🔑 رمز: <b class="mono" style="color:#fbbf24">__ADMIN_PASS__</b></div>
+   <div>🛠 دستور مدیریت در ترمینال سرور: <code class="mono" style="color:#fb7185">sudo arz</code></div>
     </div>
   </div>
   <div class="card">
@@ -1115,38 +1276,68 @@ body{background:radial-gradient(circle at 15% 15%,rgba(16,185,129,0.16),transpar
    <div><label style="font-size:11.5px;color:var(--muted)">نرخ تومانی (IRT):</label><input id="editToman" type="number" step="any" class="input mono"></div>
     </div>
     <div style="margin-top:8px"><label style="font-size:11.5px;color:var(--muted)">نرخ دلاری (USD):</label><input id="editUsd" type="number" step="any" class="input mono"></div>
-    <div style="display:flex;gap:8px;margin-top:12px">
-   <button class="btn btn-s" style="flex:1;justify-content:center" onclick="saveRateOverride()">ذخیره نرخ جدید</button>
-   <button class="btn btn-p" onclick="syncNow()">بروزرسانی از ArzDigital</button>
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+   <button class="btn btn-s" style="flex:1;justify-content:center" onclick="saveRateOverride()">💾 ذخیره نرخ دستی</button>
+   <button class="btn btn-p" onclick="resetRateOverrides()">🔄 دریافت زنده از ArzDigital</button>
     </div>
     <div id="editStatus" style="font-size:11.5px;color:#34d399;margin-top:6px"></div>
   </div>
    </div>
-   <div class="card">
-  <h2 style="font-size:15px;color:#fb7185;margin-bottom:8px">📢 ارسال پیام همگانی به تمام کاربران ربات (Broadcast)</h2>
-  <textarea id="bcText" rows="3" placeholder="متن اطلاعیه یا پیام همگانی خود را بنویسید..."></textarea>
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px">
-    <span id="bcStatus" style="font-size:12px;color:#34d399"></span>
-    <button class="btn btn-d" onclick="sendBroadcast()">🚀 ارسال به تمام کاربران</button>
+   <div class="grid-2">
+  <div class="card">
+    <h2 style="font-size:15px;color:#34d399;margin-bottom:8px">📡 ارسال تابلوی نرخ ارز به کانال یا گروه تلگرام</h2>
+    <p style="font-size:11.5px;color:var(--muted);margin-bottom:8px">ابتدا با دکمه‌های بالا ربات را در کانال یا گروه ادمین کنید، سپس یوزرنیم کانال (مثلاً <span class="mono">@mychannel</span>) یا آیدی عددی گروه را وارد کنید:</p>
+    <div style="display:flex;gap:8px">
+   <input id="targetChatInput" class="input mono" style="margin-top:0" placeholder="@mychannel یا -100123456789">
+   <button class="btn btn-s" onclick="sendBoardToChat()">📊 ارسال تابلو</button>
+    </div>
+    <div id="targetChatStatus" style="font-size:11.5px;color:#34d399;margin-top:6px"></div>
   </div>
+  <div class="card">
+    <h2 style="font-size:15px;color:#fb7185;margin-bottom:8px">📢 ارسال پیام همگانی به تمام کاربران ربات (Broadcast)</h2>
+    <textarea id="bcText" rows="2" placeholder="متن اطلاعیه یا پیام همگانی خود را بنویسید..."></textarea>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px">
+   <span id="bcStatus" style="font-size:12px;color:#34d399"></span>
+   <button class="btn btn-d" onclick="sendBroadcast()">🚀 ارسال به تمام کاربران</button>
+    </div>
+  </div>
+   </div>
+   <div class="card">
+  <h2 style="font-size:15px;color:#38bdf8;margin-bottom:10px">🛟 صندوق تیکت‌های پشتیبانی کاربران (پاسخ مستقیم به تلگرام)</h2>
+  <div id="ticketsContainer" style="font-size:12.5px;color:var(--muted)">در حال بارگذاری تیکت‌ها...</div>
    </div>
  </div>
   </div>
 </div>
 <script>
-let RATES=[],selectedChartCode='USD';
+let RATES=[],selectedChartCode='USD',BOT_USER='__BOT_USER__';
 const EXPECTED_USER="__ADMIN_USER__",EXPECTED_PASS="__ADMIN_PASS__";
+function openTgLink(url){
+  try{
+ if(window.Telegram&&window.Telegram.WebApp&&window.Telegram.WebApp.openTelegramLink&&url.startsWith('https://t.me/')){
+   window.Telegram.WebApp.openTelegramLink(url);return;
+ }
+  }catch(e){}
+  window.open(url,'_blank');
+}
+function addBotToGroup(){
+  openTgLink('https://t.me/'+BOT_USER+'?startgroup=true');
+}
+function addBotToChannel(){
+  openTgLink('https://t.me/'+BOT_USER+'?startchannel&admin=post_messages+edit_messages+delete_messages');
+}
 function switchView(v){
   document.getElementById('viewMiniApp').classList.toggle('hidden',v!=='miniapp');
   document.getElementById('viewAdmin').classList.toggle('hidden',v!=='admin');
+  if(v==='admin'){
+ document.getElementById('adminLoginCard').classList.add('hidden');
+ document.getElementById('adminDashContent').classList.remove('hidden');
+  }
 }
 function checkAutoLogin(){
   const p=new URLSearchParams(window.location.search);
-  if(window.location.pathname.includes('/admin'))switchView('admin');
-  if(p.get('u')===EXPECTED_USER&&p.get('p')===EXPECTED_PASS){
- document.getElementById('loginPass').value=EXPECTED_PASS;
- document.getElementById('adminLoginCard').classList.add('hidden');
- document.getElementById('adminDashContent').classList.remove('hidden');
+  if(window.location.pathname.includes('/admin')||p.get('autologin')==='1'||p.get('u')===EXPECTED_USER){
+ switchView('admin');
   }
 }
 function doAdminLogin(){
@@ -1159,14 +1350,37 @@ function doAdminLogin(){
 async function loadData(sync=false){
   try{
  const r=await fetch('/api/rates'+(sync?'?sync=1':'')),d=await r.json();
+ if(d.botUsername){
+   BOT_USER=d.botUsername;
+   document.getElementById('hdrBotUser').innerText='@'+BOT_USER;
+   document.getElementById('statBotUser').innerText='@'+BOT_USER;
+ }
  if(d.rates){
    RATES=d.rates;
    document.getElementById('statUsers').innerText=d.usersCount||1;
    document.getElementById('statIp').innerText='http://'+(d.serverIp||window.location.hostname)+'/admin';
-   document.getElementById('statTunnel').innerText=d.tunnelUrl?(d.tunnelUrl+'/miniapp'):window.location.origin;
-   populateSelects();runConvert();renderCards();drawChart(selectedChartCode);
+   document.getElementById('statTunnel').innerText=d.tunnelUrl?(d.tunnelUrl+'/admin'):window.location.origin;
+   populateSelects();runConvert();renderCards();drawChart(selectedChartCode);renderTickets(d.tickets||[]);
  }
   }catch(e){}
+}
+function renderTickets(list){
+  const el=document.getElementById('ticketsContainer');
+  if(!list||!list.length){el.innerHTML='<p style="color:#94a3b8">هنوز پیام پشتیبانی ثبت نشده است.</p>';return;}
+  el.innerHTML=list.map(t=>'<div style="background:#020617;border:1px solid rgba(148,163,184,0.2);border-radius:11px;padding:10px;margin-bottom:8px"><div style="display:flex;justify-content:space-between"><b>'+t.name+' (ID: '+t.user_id+')</b><span style="color:'+(t.reply?'#34d399':'#fbbf24')+'">'+(t.reply?'پاسخ داده شده':'در انتظار پاسخ')+'</span></div><div style="margin:6px 0;color:#f8fafc">'+t.message+'</div>'+(t.reply?'<div style="color:#34d399;font-size:11.5px;margin-bottom:6px">پاسخ شما: '+t.reply+'</div>':'')+'<div style="display:flex;gap:6px"><input id="rep_'+t.id+'" class="input" style="margin-top:0" placeholder="پاسخ به این کاربر..."><button class="btn btn-s" onclick="replyTicket('+t.id+')">ارسال</button></div></div>').join('');
+}
+async function replyTicket(id){
+  const inp=document.getElementById('rep_'+id);if(!inp||!inp.value.trim())return;
+  const r=await fetch('/api/reply_ticket',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:EXPECTED_USER,password:EXPECTED_PASS,id,reply:inp.value.trim()})});
+  if(r.ok)await loadData(false);
+}
+async function sendBoardToChat(){
+  const target=document.getElementById('targetChatInput').value.trim(),st=document.getElementById('targetChatStatus');
+  if(!target)return;
+  st.innerText='⏳ در حال ارسال تابلو به '+target+'...';
+  const r=await fetch('/api/send_board',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:EXPECTED_USER,password:EXPECTED_PASS,target})});
+  const d=await r.json();
+  st.innerText=d.ok?'✅ تابلوی نرخ ارز با موفقیت به '+target+' ارسال شد!':('❌ خطا: '+(d.error||'ربات در مقصد ادمین نیست'));
 }
 function populateSelects(){
   const s1=document.getElementById('convFrom'),s2=document.getElementById('convTo'),se=document.getElementById('editCode');
@@ -1218,10 +1432,15 @@ async function saveRateOverride(){
   const r=await fetch('/api/override',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:EXPECTED_USER,password:EXPECTED_PASS,code,toman,usd})});
   if(r.ok){document.getElementById('editStatus').innerText='✅ نرخ '+code+' ذخیره شد!';await loadData(false);}
 }
+async function resetRateOverrides(){
+  const r=await fetch('/api/override',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:EXPECTED_USER,password:EXPECTED_PASS,reset:true})});
+  if(r.ok){document.getElementById('editStatus').innerText='✅ تمام نرخ‌ها به ArzDigital زنده بازنشانی شد!';await loadData(true);}
+}
 async function sendSupport(){
   const m=document.getElementById('supInput').value.trim();if(!m)return;
   await fetch('/api/support',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:m})});
   document.getElementById('supInput').value='';document.getElementById('supStatus').innerText='✅ پیام شما به تلگرام مالک ربات ارسال شد!';
+  await loadData(false);
 }
 async function sendBroadcast(){
   const m=document.getElementById('bcText').value.trim();if(!m)return;
@@ -1240,6 +1459,7 @@ async def handle_page(request):
   .replace("__TON__", TON_WALLET)
   .replace("__TRON__", TRON_WALLET)
   .replace("__GITHUB__", GITHUB_URL)
+  .replace("__BOT_USER__", BOT_USERNAME_CACHE)
  )
  return web.Response(text=html, content_type="text/html")
 async def start_web_server(bot_instance: Bot):
@@ -1251,6 +1471,8 @@ async def start_web_server(bot_instance: Bot):
  app.router.add_get("/api/rates", api_rates)
  app.router.add_post("/api/override", api_override)
  app.router.add_post("/api/support", api_support)
+ app.router.add_post("/api/reply_ticket", api_reply_ticket)
+ app.router.add_post("/api/send_board", api_send_board)
  app.router.add_post("/api/broadcast", api_broadcast)
  runner = web.AppRunner(app)
  await runner.setup()
@@ -1258,9 +1480,16 @@ async def start_web_server(bot_instance: Bot):
  await site.start()
  logging.info("Web Panel & Mini App active on http://0.0.0.0:8080")
 async def main():
+ global BOT_USERNAME_CACHE
  load_saved_users()
  await refresh_live_prices()
  bot = Bot(token=BOT_TOKEN)
+ try:
+  me = await bot.get_me()
+  if me.username:
+   BOT_USERNAME_CACHE = me.username
+ except Exception:
+  pass
  await start_web_server(bot)
  dp = Dispatcher(storage=MemoryStorage())
  dp.include_router(router)
