@@ -350,24 +350,32 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
             </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
-            <a
-              href={`https://t.me/${botUsernameInput || 'ArzPulseProBot'}?startgroup=true`}
-              target="_blank"
-              rel="noreferrer"
-              className="py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition-colors"
+            <button
+              type="button"
+              onClick={() => {
+                const cleanBot = (botUsernameInput || 'ArzPulseProBot').replace(/^@/, '').trim();
+                setSavedBanner(`درخواست افزودن ربات @${cleanBot} به گروه تلگرام فعال شد (tg://resolve?domain=${cleanBot}&startgroup=true).`);
+                setTimeout(() => setSavedBanner(''), 4000);
+                window.location.href = `tg://resolve?domain=${cleanBot}&startgroup=true`;
+              }}
+              className="py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
             >
               <span>👥 افزودن ربات به گروه تلگرام</span>
               <ExternalLink className="w-3.5 h-3.5 shrink-0" />
-            </a>
-            <a
-              href={`https://t.me/${botUsernameInput || 'ArzPulseProBot'}?startchannel&admin=post_messages+edit_messages+delete_messages`}
-              target="_blank"
-              rel="noreferrer"
-              className="py-2.5 px-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition-colors"
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const cleanBot = (botUsernameInput || 'ArzPulseProBot').replace(/^@/, '').trim();
+                setSavedBanner(`درخواست افزودن ربات @${cleanBot} به کانال تلگرام فعال شد (tg://resolve?domain=${cleanBot}&startchannel).`);
+                setTimeout(() => setSavedBanner(''), 4000);
+                window.location.href = `tg://resolve?domain=${cleanBot}&startchannel&admin=post_messages+edit_messages+delete_messages`;
+              }}
+              className="py-2.5 px-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
             >
               <span>📢 افزودن ربات به کانال تلگرام</span>
               <ExternalLink className="w-3.5 h-3.5 shrink-0" />
-            </a>
+            </button>
           </div>
         </div>
 

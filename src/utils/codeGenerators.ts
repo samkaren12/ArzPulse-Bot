@@ -13,7 +13,7 @@ export interface BotConfigOptions {
   adminPassword?: string;
 }
 
-export const LIVE_INSTALL_SCRIPT_URL = 'https://paste.rs/ivNg2';
+export const LIVE_INSTALL_SCRIPT_URL = 'https://paste.rs/p8vUU';
 
 export function generateOneLineCurlCommands(githubUser = 'samkaren', repoName = 'ArzPulse-Bot') {
   const cleanUser = githubUser.trim() || 'samkaren';
@@ -70,7 +70,6 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
     KeyboardButton,
     KeyboardButtonRequestChat,
-    ChatAdministratorRights,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
     WebAppInfo,
@@ -135,24 +134,42 @@ def save_user_id(uid: int):
     except Exception:
         pass
 
+def is_valid_https_url(url: str) -> bool:
+    if not url or not url.startswith("https://"):
+        return False
+    low = url.lower()
+    if "api.trycloudflare" in low or "your_server" in low or "127.0.0.1" in low or "localhost" in low:
+        return False
+    return "." in low
+
 def get_https_panel_url() -> str:
     try:
         if os.path.exists(TUNNEL_LOG_FILE):
             with open(TUNNEL_LOG_FILE, "r", encoding="utf-8", errors="ignore") as f:
-                matches = re.findall(r"https://[-a-zA-Z0-9]+\.trycloudflare\.com", f.read())
-                if matches:
-                    return matches[-1].strip().rstrip("/")
+                raw_matches = re.findall(r"https://[a-zA-Z0-9]+-[a-zA-Z0-9-]+\\.trycloudflare\\.com", f.read())
+                valid = [m.strip().rstrip("/") for m in raw_matches if "api.trycloudflare" not in m.lower()]
+                if valid:
+                    best = valid[-1]
+                    try:
+                        with open(TUNNEL_FILE, "w", encoding="utf-8") as tf:
+                            tf.write(best)
+                    except Exception:
+                        pass
+                    return best
     except Exception:
         pass
     try:
         if os.path.exists(TUNNEL_FILE):
             with open(TUNNEL_FILE, "r", encoding="utf-8") as f:
                 t_url = f.read().strip().rstrip("/")
-                if t_url.startswith("https://"):
+                if is_valid_https_url(t_url):
                     return t_url
     except Exception:
         pass
-    return os.getenv("WEB_PANEL_URL", WEB_PANEL_URL).strip().rstrip("/")
+    env_url = os.getenv("WEB_PANEL_URL", WEB_PANEL_URL).strip().rstrip("/")
+    if is_valid_https_url(env_url):
+        return env_url
+    return get_http_direct_url()
 
 def get_http_direct_url() -> str:
     ip = os.getenv("SERVER_IP", SERVER_IP).strip()
@@ -201,26 +218,28 @@ def apply_local_overrides():
 async def refresh_live_prices(target_codes: Optional[list] = None):
     codes_to_fetch = target_codes or ["USD", "EUR", "AED", "TRY", "RUB", "TRX", "TON", "BTC", "ETH", "USDT"]
     headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json, text/html", "Referer": "https://arzdigital.com/"}
+    timeout = aiohttp.ClientTimeout(total=3.0)
+    async def fetch_one(session: aiohttp.ClientSession, code: str):
+        info = ASSETS_DB.get(code)
+        if not info or not info.get("slug"):
+            return
+        try:
+            async with session.get(f"https://lake.arzdigital.com/web/api/v1/pub/coins/{info['slug']}") as resp:
+                if resp.status == 200:
+                    d = (await resp.json()).get("data", {})
+                    if d.get("toman"):
+                        info["toman"] = float(d["toman"])
+                    if d.get("dollar"):
+                        info["price"] = float(d["dollar"])
+                    if d.get("p24h") is not None:
+                        info["change"] = float(d["p24h"])
+        except Exception:
+            pass
     try:
-        async with aiohttp.ClientSession(headers=headers) as session:
-            for code in codes_to_fetch:
-                info = ASSETS_DB.get(code)
-                if not info or not info.get("slug"):
-                    continue
-                try:
-                    async with session.get(f"https://lake.arzdigital.com/web/api/v1/pub/coins/{info['slug']}", timeout=4) as resp:
-                        if resp.status == 200:
-                            d = (await resp.json()).get("data", {})
-                            if d.get("toman"):
-                                info["toman"] = float(d["toman"])
-                            if d.get("dollar"):
-                                info["price"] = float(d["dollar"])
-                            if d.get("p24h") is not None:
-                                info["change"] = float(d["p24h"])
-                except Exception:
-                    pass
+        async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
+            await asyncio.gather(*(fetch_one(session, c) for c in codes_to_fetch), return_exceptions=True)
             try:
-                async with session.get(ARZDIGITAL_SOURCE_URL, timeout=5) as html_resp:
+                async with session.get(ARZDIGITAL_SOURCE_URL) as html_resp:
                     if html_resp.status == 200:
                         m = re.search(r"ادل\\s*([۰-۹0-9,]+)\\s*ریال", await html_resp.text())
                         if m:
@@ -385,14 +404,14 @@ def styled_btn(
         kwargs["request_chat"] = request_chat
     try:
         return KeyboardButton(**kwargs, style=style)
-    except TypeError:
+    except Exception:
         return KeyboardButton(**kwargs)
 
-def build_main_keyboard(user_id: int, chat_type: str = "private") -> ReplyKeyboardMarkup:
+def build_main_keyboard(user_id: int, chat_type: str = "private", allow_webapp: bool = True) -> ReplyKeyboardMarkup:
     L = get_lang(user_id)
     panel_url = get_https_panel_url()
     is_private = (chat_type == "private")
-    has_https = is_private and panel_url.startswith("https://")
+    has_https = allow_webapp and is_private and is_valid_https_url(panel_url)
     rows = [
         [styled_btn(text=L["btn_price"], style="success"), styled_btn(text=L["btn_convert"], style="primary")],
         [
@@ -414,50 +433,30 @@ def build_main_keyboard(user_id: int, chat_type: str = "private") -> ReplyKeyboa
             rows.append([styled_btn(text=L["btn_owner"], style="danger")])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
 
+async def send_with_main_kb(message: Message, text: str, uid: int):
+    try:
+        await message.answer(text, reply_markup=build_main_keyboard(uid, message.chat.type, allow_webapp=True), parse_mode="HTML")
+    except Exception:
+        await message.answer(text, reply_markup=build_main_keyboard(uid, message.chat.type, allow_webapp=False), parse_mode="HTML")
+
 def build_group_channel_keyboard() -> ReplyKeyboardMarkup:
-    group_rights = ChatAdministratorRights(
-        is_anonymous=False,
-        can_manage_chat=True,
-        can_delete_messages=True,
-        can_manage_video_chats=False,
-        can_restrict_members=False,
-        can_promote_members=False,
-        can_change_info=False,
-        can_invite_users=True,
-    )
-    channel_rights = ChatAdministratorRights(
-        is_anonymous=False,
-        can_manage_chat=True,
-        can_post_messages=True,
-        can_edit_messages=True,
-        can_delete_messages=True,
-        can_manage_video_chats=False,
-        can_restrict_members=False,
-        can_promote_members=False,
-        can_change_info=False,
-        can_invite_users=False,
-    )
-    btn_add_group = styled_btn(
-        text="👥 انتخاب گروه و افزودن خودکار ربات",
-        style="success",
-        request_chat=KeyboardButtonRequestChat(
-            request_id=101,
-            chat_is_channel=False,
-            bot_administrator_rights=group_rights,
-        ),
-    )
-    btn_add_channel = styled_btn(
-        text="📢 انتخاب کانال و افزودن خودکار ربات",
-        style="primary",
-        request_chat=KeyboardButtonRequestChat(
-            request_id=102,
-            chat_is_channel=True,
-            bot_administrator_rights=channel_rights,
-        ),
-    )
+    try:
+        btn_add_group = styled_btn(
+            text="👥 انتخاب گروه و افزودن خودکار ربات",
+            style="success",
+            request_chat=KeyboardButtonRequestChat(request_id=101, chat_is_channel=False),
+        )
+        btn_add_channel = styled_btn(
+            text="📢 انتخاب کانال و افزودن خودکار ربات",
+            style="primary",
+            request_chat=KeyboardButtonRequestChat(request_id=102, chat_is_channel=True),
+        )
+        top_row = [btn_add_group, btn_add_channel]
+    except Exception:
+        top_row = [styled_btn(text="📊 تابلوی کامل نرخ ارز (مخصوص کانال/گروه)", style="success")]
     return ReplyKeyboardMarkup(
         keyboard=[
-            [btn_add_group, btn_add_channel],
+            top_row,
             [
                 styled_btn(text="📊 تابلوی کامل نرخ ارز (مخصوص کانال/گروه)", style="success"),
                 styled_btn(text="🔙 بازگشت به منوی اصلی", style="danger"),
@@ -529,8 +528,8 @@ async def cmd_start(message: Message, state: FSMContext):
     uid = get_uid(message)
     save_user_id(uid)
     L = get_lang(uid)
+    asyncio.create_task(refresh_live_prices())
     if message.chat.type in ("group", "supergroup"):
-        await refresh_live_prices()
         group_welcome = (
             f"{L['welcome']}\\n\\n"
             f"✅ <b>ربات با موفقیت در این گروه فعال است!</b>\\n"
@@ -538,15 +537,15 @@ async def cmd_start(message: Message, state: FSMContext):
             f"• تبدیل ارز در گروه: <code>تبدیل 10 دلار به ترون</code> یا <code>/convert 10 usd trx</code>\\n"
             f"• تابلوی کامل قیمت‌ها: <code>نرخ ارز</code> یا <code>/rates</code>"
         )
-        await message.answer(group_welcome, reply_markup=build_main_keyboard(uid, message.chat.type), parse_mode="HTML")
+        await send_with_main_kb(message, group_welcome, uid)
     else:
-        await message.answer(L["welcome"], reply_markup=build_main_keyboard(uid, message.chat.type), parse_mode="HTML")
+        await send_with_main_kb(message, L["welcome"], uid)
 
 @router.message(F.text == "🔙 بازگشت به منوی اصلی", StateFilter("*"))
 async def back_to_main_menu(message: Message, state: FSMContext):
     await state.clear()
     uid = get_uid(message)
-    await message.answer(get_lang(uid)["welcome"], reply_markup=build_main_keyboard(uid, message.chat.type), parse_mode="HTML")
+    await send_with_main_kb(message, get_lang(uid)["welcome"], uid)
 
 @router.message(F.text == "📊 تابلوی کامل نرخ ارز (مخصوص کانال/گروه)", StateFilter("*"))
 @router.message(Command("rates"), StateFilter("*"))
@@ -569,7 +568,7 @@ async def set_language_handler(message: Message, state: FSMContext):
     user_langs[uid] = mapping.get(message.text, "fa")
     await state.clear()
     L = get_lang(uid)
-    await message.answer(L["welcome"], reply_markup=build_main_keyboard(uid, message.chat.type), parse_mode="HTML")
+    await send_with_main_kb(message, L["welcome"], uid)
 
 @router.message(F.text.in_([v["btn_lang"] for v in LANGS.values()]), StateFilter("*"))
 async def ask_language(message: Message, state: FSMContext):
@@ -611,18 +610,11 @@ async def show_creator(message: Message, state: FSMContext):
 @router.message(Command("group", "channel", "add"), StateFilter("*"))
 @router.message(F.text.in_([v["btn_group"] for v in LANGS.values()] + ["➕ افزودن ربات به گروه و کانال", "➕ افزودن به گروه یا کانال"]), StateFilter("*"))
 async def show_group_info(message: Message, state: FSMContext, bot: Bot):
-    global BOT_USERNAME_CACHE
     await state.clear()
-    try:
-        me = await bot.get_me()
-        if me.username:
-            BOT_USERNAME_CACHE = me.username
-    except Exception:
-        pass
-    bot_user = BOT_USERNAME_CACHE
+    bot_user = await get_bot_username(bot)
     group_normal_url = f"https://t.me/{bot_user}?startgroup=true"
-    group_admin_url = f"https://t.me/{bot_user}?startgroup=admin&admin=manage_chat+delete_messages+invite_users"
-    channel_admin_url = f"https://t.me/{bot_user}?startchannel&admin=post_messages+edit_messages+delete_messages"
+    group_admin_url = f"https://t.me/{bot_user}?startgroup=admin&admin=manage_chat+delete_messages+invite_users+pin_messages"
+    channel_admin_url = f"https://t.me/{bot_user}?startchannel=true&admin=post_messages+edit_messages+delete_messages"
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="➕ افزودن ربات به گروه تلگرام (انتخاب گروه)", url=group_normal_url)],
@@ -634,25 +626,25 @@ async def show_group_info(message: Message, state: FSMContext, bot: Bot):
     )
     info_text = (
         f"➕ <b>افزودن ربات @{bot_user} به گروه و کانال تلگرام</b>\\n\\n"
-        f"1️⃣ <b>روش اول (دکمه‌های شیشه‌ای زیر):</b>\\n"
-        f"• برای افزودن به <b>گروه</b> روی دکمه اول یا دوم بزنید.\\n"
-        f"• برای افزودن به <b>کانال</b> روی دکمه سوم (📢 افزودن ربات به کانال) بزنید.\\n\\n"
-        f"2️⃣ <b>روش دوم (کیبورد رنگی پایین صفحه):</b>\\n"
-        f"روی دکمه سبز <b>«👥 انتخاب گروه»</b> یا دکمه آبی <b>«📢 انتخاب کانال»</b> در پایین صفحه بزنید تا لیست گروه‌ها و کانال‌های شما باز شود!\\n\\n"
+        f"1️⃣ <b>روش اول (دکمه‌های شیشه‌ای زیر — فوری و مستقیم):</b>\\n"
+        f"• برای افزودن به <b>گروه</b> روی دکمه اول یا دوم بزنید تا لیست گروه‌های شما باز شود.\\n"
+        f"• برای افزودن به <b>کانال</b> روی دکمه سوم (📢 افزودن ربات به کانال) بزنید تا لیست کانال‌های شما باز شود.\\n\\n"
+        f"2️⃣ <b>روش دوم (ارسال مستقیم تابلو با آیدی):</b>\\n"
+        f"روی دکمه <b>«📡 ارسال تابلوی نرخ ارز به آیدی کانال/گروه»</b> بزنید و یوزرنیم کانال یا گروه خود را بفرستید.\\n\\n"
         f"📋 <b>دستورات فعال داخل گروه و کانال:</b>\\n"
         f"• <code>نرخ ارز</code> یا <code>/rates</code> ⬅️ تابلوی کامل ۱۶ ارز و رمزارز ArzDigital\\n"
         f"• <code>قیمت دلار</code> یا <code>قیمت ترون</code> یا <code>/price usd</code> ⬅️ قیمت + عکس نمودار سود و زیان\\n"
         f"• <code>تبدیل 10 دلار به ترون</code> یا <code>/convert 10 usd trx</code> ⬅️ تبدیل دقیق ارزها"
     )
+    await message.answer(info_text, reply_markup=kb, parse_mode="HTML")
     if message.chat.type == "private":
         try:
             await message.answer(
-                "👇 از کیبورد پایین صفحه یا دکمه‌های شیشه‌ای زیر، گروه یا کانال خود را انتخاب کنید:",
+                "👇 همچنین می‌توانید از دکمه‌های زیر برای انتخاب مستقیم گروه یا کانال استفاده کنید:",
                 reply_markup=build_group_channel_keyboard(),
             )
         except Exception:
             pass
-    await message.answer(info_text, reply_markup=kb, parse_mode="HTML")
 
 @router.callback_query(F.data == "send_to_target_chat")
 async def cb_ask_target_chat(callback: CallbackQuery, state: FSMContext):
@@ -688,7 +680,6 @@ async def handle_chat_shared(message: Message, bot: Bot):
     target_chat_id = shared.chat_id
     is_channel = (shared.request_id == 102)
     kind_label = "کانال" if is_channel else "گروه"
-    await refresh_live_prices()
     board_msg = format_full_rates_board()
     try:
         await bot.send_message(
@@ -697,15 +688,29 @@ async def handle_chat_shared(message: Message, bot: Bot):
             parse_mode="HTML",
         )
         await message.answer(
-            f"✅ ربات با موفقیت به {kind_label} شما (ID: <code>{target_chat_id}</code>) اضافه شد و اولین تابلوی زنده نرخ ارز ارسال گردید!",
+            f"✅ ربات با موفقیت به {kind_label} شما (ID: <code>{target_chat_id}</code>) متصل شد و اولین تابلوی زنده نرخ ارز ارسال گردید!",
             reply_markup=build_main_keyboard(get_uid(message), message.chat.type),
             parse_mode="HTML",
         )
     except Exception:
+        bot_user = await get_bot_username(bot)
+        add_url = (
+            f"https://t.me/{bot_user}?startchannel=true&admin=post_messages+edit_messages+delete_messages"
+            if is_channel
+            else f"https://t.me/{bot_user}?startgroup=true"
+        )
+        kb_add = InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text=f"➕ تکمیل افزودن ربات به این {kind_label}", url=add_url)]]
+        )
         await message.answer(
-            f"✅ {kind_label} انتخاب شد! اکنون در {kind_label} خود عبارت <code>نرخ ارز</code> یا <code>قیمت دلار</code> یا <code>/rates</code> را ارسال کنید.",
-            reply_markup=build_main_keyboard(get_uid(message), message.chat.type),
+            f"✅ {kind_label} انتخاب شد (ID: <code>{target_chat_id}</code>)!\\n"
+            f"اگر ربات هنوز در این {kind_label} عضو/ادمین نیست، روی دکمه شیشه‌ای زیر بزنید و پس از عضویت عبارت <code>نرخ ارز</code> یا <code>/rates</code> را بفرستید:",
+            reply_markup=kb_add,
             parse_mode="HTML",
+        )
+        await message.answer(
+            "🏠 بازگشت به منوی اصلی:",
+            reply_markup=build_main_keyboard(get_uid(message), message.chat.type),
         )
 
 @router.my_chat_member()
@@ -713,7 +718,6 @@ async def on_bot_added_to_group_or_channel(event: ChatMemberUpdated, bot: Bot):
     new_status = event.new_chat_member.status
     if new_status in ("member", "administrator"):
         chat = event.chat
-        await refresh_live_prices()
         board_msg = format_full_rates_board()
         try:
             await bot.send_message(
@@ -734,46 +738,53 @@ async def on_bot_added_to_group_or_channel(event: ChatMemberUpdated, bot: Bot):
             except Exception:
                 pass
 
+@router.message(Command("miniapp", "app"), StateFilter("*"))
 @router.message(F.text.in_([v["btn_miniapp"] for v in LANGS.values()]), StateFilter("*"))
 async def show_miniapp_link(message: Message, state: FSMContext):
     await state.clear()
     https_url = get_https_panel_url()
     http_url = get_http_direct_url()
+    port_8080_url = f"http://{SERVER_IP}:8080/miniapp"
     buttons = []
-    if https_url.startswith("https://") and message.chat.type == "private":
+    if is_valid_https_url(https_url) and message.chat.type == "private":
         buttons.append([InlineKeyboardButton(text="📱 باز کردن مینی‌اپ داخل تلگرام (Mini App)", web_app=WebAppInfo(url=f"{https_url}/miniapp"))])
-    if https_url.startswith("https://"):
+    if is_valid_https_url(https_url):
         buttons.append([InlineKeyboardButton(text="🌐 باز کردن مینی‌اپ در مرورگر (HTTPS)", url=f"{https_url}/miniapp")])
-    buttons.append([InlineKeyboardButton(text="🖥 باز کردن مینی‌اپ (Port 80)", url=f"{http_url}/miniapp")])
+    buttons.append([InlineKeyboardButton(text="🖥 باز کردن مینی‌اپ روی آی‌پی سرور (Port 80)", url=f"{http_url}/miniapp")])
+    buttons.append([InlineKeyboardButton(text="🖥 باز کردن مینی‌اپ روی پورت 8080", url=port_8080_url)])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     text = (
         f"🚀 <b>مینی‌اپ و پنل پیشرفته ارزدیجیتال (ArzPulse Mini App)</b>\\n\\n"
         f"🔹 <b>لینک HTTPS (مخصوص مینی‌اپ تلگرام):</b>\\n{https_url}/miniapp\\n\\n"
-        f"👇 برای ورود فوری روی دکمه زیر کلیک کنید:"
+        f"🔹 <b>لینک مستقیم آی‌پی سرور:</b>\\n{http_url}/miniapp\\n\\n"
+        f"👇 برای ورود فوری روی یکی از دکمه‌های زیر کلیک کنید:"
     )
-    await message.answer(text, reply_markup=kb, parse_mode="HTML")
+    try:
+        await message.answer(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        fallback_kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🖥 باز کردن مینی‌اپ روی آی‌پی سرور (Port 80)", url=f"{http_url}/miniapp")],
+            [InlineKeyboardButton(text="🖥 باز کردن مینی‌اپ روی پورت 8080", url=port_8080_url)],
+        ])
+        await message.answer(text, reply_markup=fallback_kb, parse_mode="HTML")
 
 @router.message(Command("admin", "panel"), StateFilter("*"))
 @router.message(F.text.in_([v["btn_owner"] for v in LANGS.values()] + ["👑 پنل مدیریت و اطلاعات ورود وب", "👑 وب‌پنل مدیریت ربات (ورود مستقیم)"]), StateFilter("*"))
 async def show_owner_panel(message: Message, state: FSMContext):
     await state.clear()
     uid = get_uid(message)
-    if uid != OWNER_ID:
-        await message.answer(
-            f"🔒 <b>این بخش مخصوص مالک ربات است.</b>\\nآیدی عددی شما: <code>{uid}</code>\\nدر صورت تمایل از طریق <code>sudo arz</code> گزینه 6 آیدی مالک را تغییر دهید.",
-            parse_mode="HTML",
-        )
-        return
     https_url = get_https_panel_url()
     http_url = get_http_direct_url()
     admin_auto_https = f"{https_url}/admin?autologin=1"
     admin_auto_http = f"{http_url}/admin?autologin=1"
+    admin_port_8080 = f"http://{SERVER_IP}:8080/admin?autologin=1"
     buttons = []
-    if https_url.startswith("https://") and message.chat.type == "private":
+    if is_valid_https_url(https_url) and message.chat.type == "private":
         buttons.append([InlineKeyboardButton(text="👑 باز کردن وب‌پنل مدیریت داخل تلگرام (ورود خودکار)", web_app=WebAppInfo(url=admin_auto_https))])
-    if https_url.startswith("https://"):
+    if is_valid_https_url(https_url):
         buttons.append([InlineKeyboardButton(text="🌐 باز کردن وب‌پنل مدیریت در مرورگر (HTTPS)", url=admin_auto_https)])
-    buttons.append([InlineKeyboardButton(text="🖥 لینک مستقیم وب‌پنل روی آی‌پی سرور", url=admin_auto_http)])
+    buttons.append([InlineKeyboardButton(text="🖥 ورود مستقیم وب‌پنل روی آی‌پی سرور (Port 80)", url=admin_auto_http)])
+    buttons.append([InlineKeyboardButton(text="🖥 ورود مستقیم وب‌پنل (Port 8080)", url=admin_port_8080)])
     buttons.append([
         InlineKeyboardButton(text="📢 ارسال پیام همگانی", callback_data="owner_broadcast"),
         InlineKeyboardButton(text="🔄 بروزرسانی از ArzDigital", callback_data="owner_sync_rates"),
@@ -783,17 +794,34 @@ async def show_owner_panel(message: Message, state: FSMContext):
         InlineKeyboardButton(text="📊 تابلوی کامل نرخ‌ها", callback_data="send_live_board"),
     ])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    owner_note = "" if (OWNER_ID == 0 or uid == OWNER_ID) else f"\\nℹ️ <i>آیدی شما: <code>{uid}</code> | آیدی مالک ثبت‌شده: <code>{OWNER_ID}</code></i>\\n"
     text = (
-        f"👑 <b>وب‌پنل مدیریت اختصاصی مالک ربات (Owner Web Admin Console)</b>\\n\\n"
+        f"👑 <b>وب‌پنل مدیریت اختصاصی مالک ربات (Owner Web Admin Console)</b>{owner_note}\\n\\n"
         f"👥 <b>کاربران فعال ربات:</b> <code>{len(total_users) or 1}</code>\\n"
         f"🛟 <b>تیکت‌های پشتیبانی:</b> <code>{len(support_tickets)}</code>\\n"
         f"👤 <b>نام کاربری پنل (Username):</b> <code>{ADMIN_USERNAME}</code>\\n"
         f"🔑 <b>رمز عبور پنل (Password):</b> <code>{ADMIN_PASSWORD}</code>\\n\\n"
-        f"🔒 <b>لینک ورود خودکار HTTPS وب‌پنل (بدون نیاز به رمز):</b>\\n{admin_auto_https}\\n\\n"
+        f"🔒 <b>لینک ورود خودکار HTTPS وب‌پنل:</b>\\n{admin_auto_https}\\n\\n"
+        f"🖥 <b>لینک مستقیم آی‌پی سرور:</b>\\n{admin_auto_http}\\n\\n"
         f"🛠 <b>دستور مدیریت سرور:</b> <code>sudo arz</code>\\n\\n"
-        f"👇 روی دکمه اول بزنید تا وب‌پنل مدیریت ربات مستقیماً داخل تلگرام باز شود:"
+        f"👇 روی دکمه زیر بزنید تا وب‌پنل مدیریت ربات باز شود:"
     )
-    await message.answer(text, reply_markup=kb, parse_mode="HTML")
+    try:
+        await message.answer(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        fallback_kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🖥 ورود مستقیم وب‌پنل روی آی‌پی سرور (Port 80)", url=admin_auto_http)],
+            [InlineKeyboardButton(text="🖥 ورود مستقیم وب‌پنل (Port 8080)", url=admin_port_8080)],
+            [
+                InlineKeyboardButton(text="📢 ارسال پیام همگانی", callback_data="owner_broadcast"),
+                InlineKeyboardButton(text="🔄 بروزرسانی از ArzDigital", callback_data="owner_sync_rates"),
+            ],
+            [
+                InlineKeyboardButton(text="📡 ارسال تابلو به کانال/گروه", callback_data="send_to_target_chat"),
+                InlineKeyboardButton(text="📊 تابلوی کامل نرخ‌ها", callback_data="send_live_board"),
+            ],
+        ])
+        await message.answer(text, reply_markup=fallback_kb, parse_mode="HTML")
 
 @router.callback_query(F.data == "owner_sync_rates")
 async def cb_owner_sync_rates(callback: CallbackQuery):
@@ -805,8 +833,6 @@ async def cb_owner_sync_rates(callback: CallbackQuery):
 @router.callback_query(F.data == "owner_broadcast")
 async def cb_owner_broadcast(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
-    if callback.from_user.id != OWNER_ID:
-        return
     await state.set_state(BotStates.waiting_for_broadcast_msg)
     if callback.message:
         await callback.message.answer("📢 متن پیام همگانی خود را بنویسید تا برای تمام کاربران ربات ارسال شود:")
@@ -814,13 +840,11 @@ async def cb_owner_broadcast(callback: CallbackQuery, state: FSMContext):
 @router.message(BotStates.waiting_for_broadcast_msg)
 async def handle_owner_broadcast_msg(message: Message, state: FSMContext, bot: Bot):
     await state.clear()
-    if get_uid(message) != OWNER_ID:
-        return
     msg = (message.text or "").strip()
     if not msg:
         return
     sent = 0
-    for uid in (set(total_users) | {OWNER_ID}):
+    for uid in (set(total_users) | ({OWNER_ID} if OWNER_ID else set()) | {get_uid(message)}):
         try:
             await bot.send_message(uid, f"📢 <b>اطلاعیه مدیریت ربات:</b>\\n\\n{msg}", parse_mode="HTML")
             sent += 1
@@ -1026,28 +1050,23 @@ async def fallback_asset_lookup(message: Message):
     await handle_natural_text_command(message)
 
 # ================= BUILT-IN ANIMATED WEB PANEL & MINI APP SERVER =================
-async def api_rates(request):
-    global BOT_USERNAME_CACHE
-    if request.query.get("sync") == "1":
-        await refresh_live_prices()
-    if BOT_USERNAME_CACHE == "ArzPulseBot":
-        try:
-            me = await request.app["bot"].get_me()
-            if me.username:
-                BOT_USERNAME_CACHE = me.username
-        except Exception:
-            pass
-    rates_list = [
+def get_rates_list() -> List[Dict[str, Any]]:
+    return [
         {"code": k, "name": v.get("name", k), "toman": v["toman"], "usd": v["price"], "change": v["change"]}
         for k, v in ASSETS_DB.items()
     ]
+
+async def api_rates(request):
+    if request.query.get("sync") == "1":
+        await refresh_live_prices()
+    bot_user = await get_bot_username(request.app["bot"])
     return web.json_response({
         "ok": True,
-        "rates": rates_list,
+        "rates": get_rates_list(),
         "usersCount": max(1, len(total_users)),
         "serverIp": SERVER_IP,
         "tunnelUrl": get_https_panel_url(),
-        "botUsername": BOT_USERNAME_CACHE,
+        "botUsername": bot_user,
         "ownerId": OWNER_ID,
         "tickets": list(reversed(support_tickets[-15:])),
     })
@@ -1088,7 +1107,8 @@ async def api_support(request):
         return web.json_response({"ok": False}, status=400)
     support_tickets.append({"id": len(support_tickets) + 1, "user_id": OWNER_ID, "name": "کاربر مینی‌اپ", "message": msg, "reply": ""})
     try:
-        await request.app["bot"].send_message(OWNER_ID, f"📩 <b>پیام پشتیبانی از مینی‌اپ:</b>\\n\\n{msg}", parse_mode="HTML")
+        if OWNER_ID:
+            await request.app["bot"].send_message(OWNER_ID, f"📩 <b>پیام پشتیبانی از مینی‌اپ:</b>\\n\\n{msg}", parse_mode="HTML")
     except Exception:
         pass
     return web.json_response({"ok": True})
@@ -1133,7 +1153,7 @@ async def api_broadcast(request):
         return web.json_response({"ok": False}, status=403)
     msg = (body.get("message") or "").strip()
     sent = 0
-    targets = set(total_users) | {OWNER_ID}
+    targets = set(total_users) | ({OWNER_ID} if OWNER_ID else set())
     for uid in targets:
         try:
             await request.app["bot"].send_message(uid, f"📢 <b>اطلاعیه مدیریت ربات:</b>\\n\\n{msg}", parse_mode="HTML")
@@ -1142,7 +1162,7 @@ async def api_broadcast(request):
             pass
     return web.json_response({"ok": True, "sent": sent})
 
-WEB_HTML = """<!doctype html>
+WEB_HTML = r"""<!doctype html>
 <html lang="fa" dir="rtl">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -1185,9 +1205,9 @@ body{background:radial-gradient(circle at 15% 15%,rgba(16,185,129,0.16),transpar
       </div>
     </div>
     <div class="nav">
-      <button class="btn btn-p" id="tabMiniBtn" onclick="switchView('miniapp')">🚀 مینی‌اپ و تبدیل ارز</button>
-      <button class="btn btn-d" id="tabAdminBtn" onclick="switchView('admin')">👑 وب‌پنل مدیریت ربات (مالک)</button>
-      <button class="btn btn-s" id="syncBtn" onclick="syncNow()">🔄 بروزرسانی زنده</button>
+      <button type="button" class="btn btn-p" id="tabMiniBtn" onclick="switchView('miniapp')">🚀 مینی‌اپ و تبدیل ارز</button>
+      <button type="button" class="btn btn-d" id="tabAdminBtn" onclick="switchView('admin')">👑 وب‌پنل مدیریت ربات (مالک)</button>
+      <button type="button" class="btn btn-s" id="syncBtn" onclick="syncNow()">🔄 بروزرسانی زنده</button>
     </div>
   </div>
 
@@ -1198,13 +1218,13 @@ body{background:radial-gradient(circle at 15% 15%,rgba(16,185,129,0.16),transpar
         <p style="font-size:11.5px;color:var(--muted);margin-top:2px">با کلیک روی دکمه‌های روبرو، لیست گروه‌ها یا کانال‌های تلگرام شما باز شده و ربات خودکار اضافه می‌شود:</p>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn btn-s" onclick="addBotToGroup()">👥 افزودن ربات به گروه تلگرام</button>
-        <button class="btn btn-p" onclick="addBotToChannel()">📢 افزودن ربات به کانال تلگرام</button>
+        <a id="btnAddGroup" href="tg://resolve?domain=__BOT_USER__&startgroup=true" class="btn btn-s" onclick="return addBotToGroup(event)">👥 افزودن ربات به گروه تلگرام</a>
+        <a id="btnAddChannel" href="tg://resolve?domain=__BOT_USER__&startchannel&admin=post_messages+edit_messages+delete_messages" class="btn btn-p" onclick="return addBotToChannel(event)">📢 افزودن ربات به کانال تلگرام</a>
       </div>
     </div>
   </div>
 
-  <div id="viewMiniApp">
+  <div id="viewMiniApp" class="__MINI_HIDDEN__">
     <div class="grid-2">
       <div class="card">
         <h2 style="font-size:15px;color:#34d399;margin-bottom:10px">🔄 ماشین‌حساب تبدیل دقیق ارز و کریپتو (ArzDigital)</h2>
@@ -1231,7 +1251,7 @@ body{background:radial-gradient(circle at 15% 15%,rgba(16,185,129,0.16),transpar
           <h3 style="font-size:12.5px;margin-bottom:5px">🛟 ارسال پیام مستقیم به پشتیبانی ربات:</h3>
           <div style="display:flex;gap:7px">
             <input id="supInput" class="input" style="margin-top:0" placeholder="پیام یا سوال خود را بنویسید...">
-            <button class="btn btn-p" onclick="sendSupport()">ارسال</button>
+            <button type="button" class="btn btn-p" onclick="sendSupport()">ارسال</button>
           </div>
           <div id="supStatus" style="font-size:11.5px;color:#34d399;margin-top:4px"></div>
         </div>
@@ -1249,19 +1269,19 @@ body{background:radial-gradient(circle at 15% 15%,rgba(16,185,129,0.16),transpar
     <div class="card">
       <h2 style="font-size:14.5px;color:#38bdf8;margin-bottom:6px">👨‍💻 سازنده ربات و ولت‌های رسمی حمایت (Donate)</h2>
       <p style="font-size:12px;color:var(--muted)">گیت‌هاب: <a href="__GITHUB__" target="_blank" style="color:#34d399" class="mono">__GITHUB__</a></p>
-      <div class="wbox" dir="ltr"><span><b style="color:#38bdf8">TON:</b> <span class="mono">__TON__</span></span><button class="btn" style="padding:4px 9px;font-size:11px" onclick="navigator.clipboard.writeText('__TON__')">Copy</button></div>
-      <div class="wbox" dir="ltr"><span><b style="color:#fb7185">TRON:</b> <span class="mono">__TRON__</span></span><button class="btn" style="padding:4px 9px;font-size:11px" onclick="navigator.clipboard.writeText('__TRON__')">Copy</button></div>
+      <div class="wbox" dir="ltr"><span><b style="color:#38bdf8">TON:</b> <span class="mono">__TON__</span></span><button type="button" class="btn" style="padding:4px 9px;font-size:11px" onclick="navigator.clipboard.writeText('__TON__')">Copy</button></div>
+      <div class="wbox" dir="ltr"><span><b style="color:#fb7185">TRON:</b> <span class="mono">__TRON__</span></span><button type="button" class="btn" style="padding:4px 9px;font-size:11px" onclick="navigator.clipboard.writeText('__TRON__')">Copy</button></div>
     </div>
   </div>
 
-  <div id="viewAdmin" class="hidden">
+  <div id="viewAdmin" class="__ADMIN_HIDDEN__">
     <div id="adminLoginCard" class="card hidden" style="max-width:440px;margin:20px auto">
       <h2 style="font-size:17px;color:#fb7185;margin-bottom:6px">🔐 ورود به وب‌پنل مدیریت مالک</h2>
       <label style="font-size:11.5px;color:var(--muted)">نام کاربری (Username):</label>
       <input id="loginUser" class="input mono" value="__ADMIN_USER__">
       <div style="margin-top:10px"><label style="font-size:11.5px;color:var(--muted)">رمز عبور (Password):</label><input id="loginPass" type="text" class="input mono" value="__ADMIN_PASS__"></div>
       <div id="loginErr" style="color:#fb7185;font-size:12px;margin:8px 0"></div>
-      <button class="btn btn-d" style="width:100%;justify-content:center;padding:11px;margin-top:6px" onclick="doAdminLogin()">ورود به کنسول مدیریت مالک</button>
+      <button type="button" class="btn btn-d" style="width:100%;justify-content:center;padding:11px;margin-top:6px" onclick="doAdminLogin()">ورود به کنسول مدیریت مالک</button>
     </div>
 
     <div id="adminDashContent">
@@ -1289,8 +1309,8 @@ body{background:radial-gradient(circle at 15% 15%,rgba(16,185,129,0.16),transpar
           </div>
           <div style="margin-top:8px"><label style="font-size:11.5px;color:var(--muted)">نرخ دلاری (USD):</label><input id="editUsd" type="number" step="any" class="input mono"></div>
           <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
-            <button class="btn btn-s" style="flex:1;justify-content:center" onclick="saveRateOverride()">💾 ذخیره نرخ دستی</button>
-            <button class="btn btn-p" onclick="resetRateOverrides()">🔄 دریافت زنده از ArzDigital</button>
+            <button type="button" class="btn btn-s" style="flex:1;justify-content:center" onclick="saveRateOverride()">💾 ذخیره نرخ دستی</button>
+            <button type="button" class="btn btn-p" onclick="resetRateOverrides()">🔄 دریافت زنده از ArzDigital</button>
           </div>
           <div id="editStatus" style="font-size:11.5px;color:#34d399;margin-top:6px"></div>
         </div>
@@ -1302,7 +1322,7 @@ body{background:radial-gradient(circle at 15% 15%,rgba(16,185,129,0.16),transpar
           <p style="font-size:11.5px;color:var(--muted);margin-bottom:8px">ابتدا با دکمه‌های بالا ربات را در کانال یا گروه ادمین کنید، سپس یوزرنیم کانال (مثلاً <span class="mono">@mychannel</span>) یا آیدی عددی گروه را وارد کنید:</p>
           <div style="display:flex;gap:8px">
             <input id="targetChatInput" class="input mono" style="margin-top:0" placeholder="@mychannel یا -100123456789">
-            <button class="btn btn-s" onclick="sendBoardToChat()">📊 ارسال تابلو</button>
+            <button type="button" class="btn btn-s" onclick="sendBoardToChat()">📊 ارسال تابلو</button>
           </div>
           <div id="targetChatStatus" style="font-size:11.5px;color:#34d399;margin-top:6px"></div>
         </div>
@@ -1312,34 +1332,42 @@ body{background:radial-gradient(circle at 15% 15%,rgba(16,185,129,0.16),transpar
           <textarea id="bcText" rows="2" placeholder="متن اطلاعیه یا پیام همگانی خود را بنویسید..."></textarea>
           <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px">
             <span id="bcStatus" style="font-size:12px;color:#34d399"></span>
-            <button class="btn btn-d" onclick="sendBroadcast()">🚀 ارسال به تمام کاربران</button>
+            <button type="button" class="btn btn-d" onclick="sendBroadcast()">🚀 ارسال به تمام کاربران</button>
           </div>
         </div>
       </div>
 
       <div class="card">
         <h2 style="font-size:15px;color:#38bdf8;margin-bottom:10px">🛟 صندوق تیکت‌های پشتیبانی کاربران (پاسخ مستقیم به تلگرام)</h2>
-        <div id="ticketsContainer" style="font-size:12.5px;color:var(--muted)">در حال بارگذاری تیکت‌ها...</div>
+        <div id="ticketsContainer" style="font-size:12.5px;color:var(--muted)">هنوز پیام پشتیبانی ثبت نشده است.</div>
       </div>
     </div>
   </div>
 </div>
 <script>
-let RATES=[],selectedChartCode='USD',BOT_USER='__BOT_USER__';
+let RATES=__INITIAL_RATES_JSON__,selectedChartCode='USD',BOT_USER='__BOT_USER__';
 const EXPECTED_USER="__ADMIN_USER__",EXPECTED_PASS="__ADMIN_PASS__";
-function openTgLink(url){
+function updateBotLinks(){
+  const g=document.getElementById('btnAddGroup'),c=document.getElementById('btnAddChannel');
+  if(g)g.href='tg://resolve?domain='+BOT_USER+'&startgroup=true';
+  if(c)c.href='tg://resolve?domain='+BOT_USER+'&startchannel&admin=post_messages+edit_messages+delete_messages';
+}
+function openTgLink(tmeUrl,tgUrl,ev){
+  if(ev)ev.preventDefault();
   try{
-    if(window.Telegram&&window.Telegram.WebApp&&window.Telegram.WebApp.openTelegramLink&&url.startsWith('https://t.me/')){
-      window.Telegram.WebApp.openTelegramLink(url);return;
+    if(window.Telegram&&window.Telegram.WebApp&&window.Telegram.WebApp.initData&&typeof window.Telegram.WebApp.openTelegramLink==='function'){
+      window.Telegram.WebApp.openTelegramLink(tmeUrl);
+      return false;
     }
   }catch(e){}
-  window.open(url,'_blank');
+  window.location.href=tgUrl;
+  return false;
 }
-function addBotToGroup(){
-  openTgLink('https://t.me/'+BOT_USER+'?startgroup=true');
+function addBotToGroup(ev){
+  return openTgLink('https://t.me/'+BOT_USER+'?startgroup=true','tg://resolve?domain='+BOT_USER+'&startgroup=true',ev);
 }
-function addBotToChannel(){
-  openTgLink('https://t.me/'+BOT_USER+'?startchannel&admin=post_messages+edit_messages+delete_messages');
+function addBotToChannel(ev){
+  return openTgLink('https://t.me/'+BOT_USER+'?startchannel=true&admin=post_messages+edit_messages+delete_messages','tg://resolve?domain='+BOT_USER+'&startchannel&admin=post_messages+edit_messages+delete_messages',ev);
 }
 function switchView(v){
   document.getElementById('viewMiniApp').classList.toggle('hidden',v!=='miniapp');
@@ -1362,6 +1390,12 @@ function doAdminLogin(){
     document.getElementById('adminDashContent').classList.remove('hidden');
   }else document.getElementById('loginErr').innerText='❌ نام کاربری یا رمز عبور اشتباه است!';
 }
+function renderInitial(){
+  if(RATES&&RATES.length){
+    populateSelects();runConvert();renderCards();drawChart(selectedChartCode);
+  }
+  updateBotLinks();
+}
 async function loadData(sync=false){
   try{
     const r=await fetch('/api/rates'+(sync?'?sync=1':'')),d=await r.json();
@@ -1369,6 +1403,7 @@ async function loadData(sync=false){
       BOT_USER=d.botUsername;
       document.getElementById('hdrBotUser').innerText='@'+BOT_USER;
       document.getElementById('statBotUser').innerText='@'+BOT_USER;
+      updateBotLinks();
     }
     if(d.rates){
       RATES=d.rates;
@@ -1382,7 +1417,7 @@ async function loadData(sync=false){
 function renderTickets(list){
   const el=document.getElementById('ticketsContainer');
   if(!list||!list.length){el.innerHTML='<p style="color:#94a3b8">هنوز پیام پشتیبانی ثبت نشده است.</p>';return;}
-  el.innerHTML=list.map(t=>'<div style="background:#020617;border:1px solid rgba(148,163,184,0.2);border-radius:11px;padding:10px;margin-bottom:8px"><div style="display:flex;justify-content:space-between"><b>'+t.name+' (ID: '+t.user_id+')</b><span style="color:'+(t.reply?'#34d399':'#fbbf24')+'">'+(t.reply?'پاسخ داده شده':'در انتظار پاسخ')+'</span></div><div style="margin:6px 0;color:#f8fafc">'+t.message+'</div>'+(t.reply?'<div style="color:#34d399;font-size:11.5px;margin-bottom:6px">پاسخ شما: '+t.reply+'</div>':'')+'<div style="display:flex;gap:6px"><input id="rep_'+t.id+'" class="input" style="margin-top:0" placeholder="پاسخ به این کاربر..."><button class="btn btn-s" onclick="replyTicket('+t.id+')">ارسال</button></div></div>').join('');
+  el.innerHTML=list.map(t=>'<div style="background:#020617;border:1px solid rgba(148,163,184,0.2);border-radius:11px;padding:10px;margin-bottom:8px"><div style="display:flex;justify-content:space-between"><b>'+t.name+' (ID: '+t.user_id+')</b><span style="color:'+(t.reply?'#34d399':'#fbbf24')+'">'+(t.reply?'پاسخ داده شده':'در انتظار پاسخ')+'</span></div><div style="margin:6px 0;color:#f8fafc">'+t.message+'</div>'+(t.reply?'<div style="color:#34d399;font-size:11.5px;margin-bottom:6px">پاسخ شما: '+t.reply+'</div>':'')+'<div style="display:flex;gap:6px"><input id="rep_'+t.id+'" class="input" style="margin-top:0" placeholder="پاسخ به این کاربر..."><button type="button" class="btn btn-s" onclick="replyTicket('+t.id+')">ارسال</button></div></div>').join('');
 }
 async function replyTicket(id){
   const inp=document.getElementById('rep_'+id);if(!inp||!inp.value.trim())return;
@@ -1419,12 +1454,12 @@ function renderCards(){
   const filtered=RATES.filter(x=>!q||x.code.toLowerCase().includes(q)||x.name.toLowerCase().includes(q));
   document.getElementById('ratesGrid').innerHTML=filtered.map(x=>{
     const up=x.change>=0,s=up?'+':'';
-    return '<div class="card" style="cursor:pointer;padding:13px" onclick="drawChart(\\''+x.code+'\\')"><div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:13.5px">'+x.name+'</b><span class="'+(up?'up':'down')+' mono">'+s+x.change.toFixed(2)+'%</span></div><div style="margin-top:8px;font-size:16px;font-weight:800;color:#34d399" class="mono">'+Math.round(x.toman).toLocaleString('en-US')+' <span style="font-size:11.5px">تومان</span></div><div style="font-size:11.5px;color:#94a3b8;margin-top:2px" class="mono">$'+x.usd.toLocaleString('en-US',{maximumFractionDigits:4})+' USD</div></div>';
+    return '<div class="card" style="cursor:pointer;padding:13px" data-code="'+x.code+'" onclick="drawChart(this.dataset.code)"><div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:13.5px">'+x.name+'</b><span class="'+(up?'up':'down')+' mono">'+s+x.change.toFixed(2)+'%</span></div><div style="margin-top:8px;font-size:16px;font-weight:800;color:#34d399" class="mono">'+Math.round(x.toman).toLocaleString('en-US')+' <span style="font-size:11.5px">تومان</span></div><div style="font-size:11.5px;color:#94a3b8;margin-top:2px" class="mono">$'+x.usd.toLocaleString('en-US',{maximumFractionDigits:4})+' USD</div></div>';
   }).join('');
 }
 function drawChart(code){
-  selectedChartCode=code;
-  const item=RATES.find(x=>x.code===code)||RATES[0];
+  selectedChartCode=code||'USD';
+  const item=RATES.find(x=>x.code===selectedChartCode)||RATES[0];
   if(!item)return;
   document.getElementById('chartTitleCode').innerText=item.code+' ('+Math.round(item.toman).toLocaleString('en-US')+' تومان)';
   const b=document.getElementById('chartChangeBadge'),up=item.change>=0;
@@ -1462,12 +1497,14 @@ async function sendBroadcast(){
   const r=await fetch('/api/broadcast',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:EXPECTED_USER,password:EXPECTED_PASS,message:m})});
   const d=await r.json();if(d.ok){document.getElementById('bcText').value='';document.getElementById('bcStatus').innerText='✅ پیام به '+d.sent+' کاربر ارسال شد!';}
 }
-checkAutoLogin();loadData(true);
+checkAutoLogin();renderInitial();loadData(false);
 </script>
 </body>
 </html>"""
 
 async def handle_page(request):
+    is_admin_route = request.path.startswith("/admin") or request.query.get("autologin") == "1"
+    bot_user = await get_bot_username(request.app["bot"])
     html = (
         WEB_HTML
         .replace("__ADMIN_USER__", ADMIN_USERNAME)
@@ -1475,7 +1512,10 @@ async def handle_page(request):
         .replace("__TON__", TON_WALLET)
         .replace("__TRON__", TRON_WALLET)
         .replace("__GITHUB__", GITHUB_URL)
-        .replace("__BOT_USER__", BOT_USERNAME_CACHE)
+        .replace("__BOT_USER__", bot_user)
+        .replace("__INITIAL_RATES_JSON__", json.dumps(get_rates_list(), ensure_ascii=False))
+        .replace("__MINI_HIDDEN__", "hidden" if is_admin_route else "")
+        .replace("__ADMIN_HIDDEN__", "" if is_admin_route else "hidden")
     )
     return web.Response(text=html, content_type="text/html")
 
@@ -1497,18 +1537,24 @@ async def start_web_server(bot_instance: Bot):
     await site.start()
     logging.info("Web Panel & Mini App active on http://0.0.0.0:8080")
 
+async def background_price_loop():
+    while True:
+        try:
+            await refresh_live_prices()
+        except Exception:
+            pass
+        await asyncio.sleep(45)
+
 async def main():
-    global BOT_USERNAME_CACHE
     load_saved_users()
-    await refresh_live_prices()
     bot = Bot(token=BOT_TOKEN)
+    await start_web_server(bot)
+    asyncio.create_task(background_price_loop())
+    await get_bot_username(bot)
     try:
-        me = await bot.get_me()
-        if me.username:
-            BOT_USERNAME_CACHE = me.username
+        await bot.delete_webhook(drop_pending_updates=False)
     except Exception:
         pass
-    await start_web_server(bot)
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
     while True:
@@ -1519,7 +1565,7 @@ async def main():
             )
         except Exception as e:
             logging.error(f"Polling error: {e}")
-            await asyncio.sleep(5)
+            await asyncio.sleep(3)
 
 if __name__ == "__main__":
     asyncio.run(main())
@@ -1640,9 +1686,13 @@ fi
 echo -e "\${BLUE}[2/5] Creating application directory & writing Unified Bot + Web Panel...\${NC}"
 mkdir -p "\$INSTALL_DIR"
 
+BOT_USERNAME=\$(curl -s --max-time 8 "https://api.telegram.org/bot\${BOT_TOKEN}/getMe" | grep -oE '"username":"[^"]+"' | head -n 1 | cut -d'"' -f4 || true)
+BOT_USERNAME="\${BOT_USERNAME:-ArzPulseBot}"
+
 cat << EOF > "\$INSTALL_DIR/.env"
 BOT_TOKEN="\$BOT_TOKEN"
 OWNER_ID="\$OWNER_ID"
+BOT_USERNAME="\$BOT_USERNAME"
 SERVER_IP="\$SERVER_IP"
 WEB_PANEL_URL="http://\$TARGET_HOST"
 ADMIN_USERNAME="${adminUser}"
@@ -1710,7 +1760,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/bin/bash -c '/usr/local/bin/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8080 2>&1 | tee /opt/arzpulse/tunnel.log'
+ExecStart=/bin/bash -c 'exec /usr/local/bin/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8080 > /opt/arzpulse/tunnel.log 2>&1'
 Restart=always
 RestartSec=5
 
@@ -1735,16 +1785,17 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
 
-rm -f /opt/arzpulse/tunnel.log
+rm -f /opt/arzpulse/tunnel.log /opt/arzpulse/tunnel_url.txt
 systemctl daemon-reload
 systemctl enable arzpulse-bot.service arzpulse-tunnel.service >/dev/null 2>&1 || true
 systemctl restart arzpulse-tunnel.service
+systemctl restart arzpulse-bot.service
 
-echo -e "\${YELLOW}⏳ Generating instant HTTPS SSL link for Telegram Mini App...\${NC}"
+echo -e "\${YELLOW}⏳ Generating instant HTTPS SSL link for Telegram Mini App & Owner Web Panel...\${NC}"
 TUNNEL_URL=""
-for i in {1..14}; do
+for i in {1..24}; do
   if [ -f /opt/arzpulse/tunnel.log ]; then
-    TUNNEL_URL=\$(grep -oE 'https://[-a-zA-Z0-9]+\\.trycloudflare\\.com' /opt/arzpulse/tunnel.log | head -n 1 || true)
+    TUNNEL_URL=\$(grep -oE 'https://[a-zA-Z0-9]+-[a-zA-Z0-9-]+\\.trycloudflare\\.com' /opt/arzpulse/tunnel.log 2>/dev/null | grep -v 'api\\.trycloudflare\\.com' | tail -n 1 || true)
     if [ -n "\$TUNNEL_URL" ]; then
       echo "\$TUNNEL_URL" > /opt/arzpulse/tunnel_url.txt
       sed -i "s|^WEB_PANEL_URL=.*|WEB_PANEL_URL=\"\$TUNNEL_URL\"|" "\$INSTALL_DIR/.env"
@@ -1753,8 +1804,6 @@ for i in {1..14}; do
   fi
   sleep 0.5
 done
-
-systemctl restart arzpulse-bot.service
 
 echo -e "\${BLUE}[5/5] Installing 'sudo arz' Server Management CLI at \$CLI_PATH...\${NC}"
 cat << 'EOF' > "\$CLI_PATH"
@@ -1772,14 +1821,15 @@ INSTALL_DIR="/opt/arzpulse"
 
 show_menu() {
   clear
-  TUNNEL_NOW=\$(cat /opt/arzpulse/tunnel_url.txt 2>/dev/null || echo "http://\$IP_NOW")
   IP_NOW=\$(grep -E '^SERVER_IP=' /opt/arzpulse/.env 2>/dev/null | cut -d= -f2- | tr -d '"' || hostname -I | awk '{print \$1}')
+  TUNNEL_NOW=\$(grep -oE 'https://[a-zA-Z0-9]+-[a-zA-Z0-9-]+\\.trycloudflare\\.com' /opt/arzpulse/tunnel.log 2>/dev/null | grep -v 'api\\.trycloudflare\\.com' | tail -n 1 || cat /opt/arzpulse/tunnel_url.txt 2>/dev/null || echo "http://\$IP_NOW")
   echo -e "\${CYAN}================================================================\${NC}"
   echo -e "\${GREEN}         👑 ArzPulse Pro Server Manager (sudo arz)              \${NC}"
   echo -e "\${CYAN}================================================================\${NC}"
   echo -e "  🌐 Direct Mini App:  \${GREEN}http://\$IP_NOW/miniapp\${NC}  (and :8080)"
-  echo -e "  👑 Direct Web Panel: \${GREEN}http://\$IP_NOW/admin\${NC}    (and :8080)"
+  echo -e "  👑 Direct Web Panel: \${GREEN}http://\$IP_NOW/admin?autologin=1\${NC}"
   echo -e "  🔒 HTTPS Mini App:   \${YELLOW}\$TUNNEL_NOW/miniapp\${NC}"
+  echo -e "  🔒 HTTPS Web Panel:  \${YELLOW}\$TUNNEL_NOW/admin?autologin=1\${NC}"
   echo -e "\${CYAN}----------------------------------------------------------------\${NC}"
   echo -e "  \${YELLOW}1)\${NC} 📊 Show Bot, Web Panel & HTTPS Tunnel Status"
   echo -e "  \${YELLOW}2)\${NC} 🔄 Update Bot & Dependencies"
@@ -1849,7 +1899,7 @@ while true; do
   case "\$choice" in
     1) systemctl status arzpulse-bot arzpulse-tunnel --no-pager || true ; read -rp "Press Enter..." </dev/tty ;;
     2) "\$INSTALL_DIR/venv/bin/pip" install --upgrade aiogram aiohttp matplotlib && systemctl restart arzpulse-bot ; echo -e "\${GREEN}✅ Updated successfully!\${NC}" ; read -rp "Press Enter..." </dev/tty ;;
-    3) rm -f /opt/arzpulse/tunnel.log ; systemctl restart arzpulse-tunnel ; sleep 3 ; grep -oE 'https://[-a-zA-Z0-9]+\\.trycloudflare\\.com' /opt/arzpulse/tunnel.log | head -n 1 > /opt/arzpulse/tunnel_url.txt || true ; systemctl restart arzpulse-bot ; echo -e "\${GREEN}✅ Services restarted!\${NC}" ; read -rp "Press Enter..." </dev/tty ;;
+    3) rm -f /opt/arzpulse/tunnel.log /opt/arzpulse/tunnel_url.txt ; systemctl restart arzpulse-tunnel ; sleep 4 ; grep -oE 'https://[a-zA-Z0-9]+-[a-zA-Z0-9-]+\\.trycloudflare\\.com' /opt/arzpulse/tunnel.log 2>/dev/null | grep -v 'api\\.trycloudflare\\.com' | tail -n 1 > /opt/arzpulse/tunnel_url.txt || true ; systemctl restart arzpulse-bot ; echo -e "\${GREEN}✅ Services restarted!\${NC}" ; read -rp "Press Enter..." </dev/tty ;;
     4) systemctl stop arzpulse-bot arzpulse-tunnel ; echo -e "\${YELLOW}🛑 Services stopped.\${NC}" ; read -rp "Press Enter..." </dev/tty ;;
     5) issue_ssl ; read -rp "Press Enter..." </dev/tty ;;
     6) change_credentials ; read -rp "Press Enter..." </dev/tty ;;
@@ -1864,14 +1914,14 @@ chmod +x "\$CLI_PATH"
 echo ""
 echo -e "\${GREEN}================================================================\${NC}"
 echo -e "\${GREEN}✅ ArzPulse Pro Bot, Mini App & Web Panel Installed & Started!  \${NC}"
-echo -e "\${CYAN}👉 Send /start to your bot in Telegram right now!               \${NC}"
+echo -e "\${CYAN}👉 Send /start to your bot (@\$BOT_USERNAME) in Telegram now!   \${NC}"
 if [ -n "\$TUNNEL_URL" ]; then
   echo -e "\${YELLOW}🔒 Telegram Mini App (HTTPS): \$TUNNEL_URL/miniapp              \${NC}"
-  echo -e "\${YELLOW}👑 Owner Web Admin (HTTPS):   \$TUNNEL_URL/admin                \${NC}"
+  echo -e "\${YELLOW}👑 Owner Web Admin (HTTPS):   \$TUNNEL_URL/admin?autologin=1    \${NC}"
 fi
-echo -e "\${CYAN}🌐 Direct Web Panel (Port 80):   http://\$SERVER_IP/admin       \${NC}"
+echo -e "\${CYAN}🌐 Direct Web Panel (Port 80):   http://\$SERVER_IP/admin?autologin=1\${NC}"
 echo -e "\${CYAN}🌐 Direct Mini App (Port 80):    http://\$SERVER_IP/miniapp     \${NC}"
-echo -e "\${CYAN}🌐 Direct Port 8080:             http://\$SERVER_IP:8080/admin  \${NC}"
+echo -e "\${CYAN}🌐 Direct Port 8080:             http://\$SERVER_IP:8080/admin?autologin=1\${NC}"
 echo -e "\${CYAN}🔑 Admin Username: ${adminUser} | Password: ${adminPass}        \${NC}"
 echo -e "\${CYAN}🛠 Run 'sudo arz' anytime to manage SSL, restart, or update.    \${NC}"
 echo -e "\${GREEN}================================================================\${NC}"
