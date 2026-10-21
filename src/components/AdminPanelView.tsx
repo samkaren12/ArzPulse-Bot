@@ -117,19 +117,42 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
     }, 550);
   };
 
-  // SSL Wizard state
-  const [sslHost, setSslHost] = useState<string>('panel.arzpulse.io');
-  const [sslEmail, setSslEmail] = useState<string>('admin@arzpulse.io');
+  // SSL Wizard state (persisted in localStorage so custom domain/subdomain stays set)
+  const [sslHost, setSslHost] = useState<string>(() => {
+    try {
+      return localStorage.getItem('arz_ssl_host_v1') || 'panel.arzpulse.io';
+    } catch {
+      return 'panel.arzpulse.io';
+    }
+  });
+  const [sslEmail, setSslEmail] = useState<string>(() => {
+    try {
+      return localStorage.getItem('arz_ssl_email_v1') || 'admin@arzpulse.io';
+    } catch {
+      return 'admin@arzpulse.io';
+    }
+  });
   const [sslStatus, setSslStatus] = useState<{
     active: boolean;
     host: string;
     mode: string;
     expires: string;
-  }>({
-    active: true,
-    host: 'panel.arzpulse.io',
-    mode: "Let's Encrypt TLS 1.3 (Auto-Renew)",
-    expires: '2027-01-15',
+  }>(() => {
+    try {
+      const saved = localStorage.getItem('arz_ssl_status_v1');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && parsed.host) return parsed;
+      }
+    } catch {
+      // ignore
+    }
+    return {
+      active: true,
+      host: 'panel.arzpulse.io',
+      mode: "Let's Encrypt TLS 1.3 + Nginx SAN (Auto-Renew)",
+      expires: '2027-04-17',
+    };
   });
 
   // Price edit state
@@ -182,21 +205,37 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
 
   const handleIssueSsl = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!sslHost.trim() || isUpdating) return;
-    const isIp = /^\d+\.\d+\.\d+\.\d+$/.test(sslHost.trim());
+    const cleanHost = sslHost
+      .trim()
+      .replace(/^https?:\/\//i, '')
+      .split('/')[0]
+      .split('?')[0]
+      .split(':')[0]
+      .trim();
+    if (!cleanHost || isUpdating) return;
+    const isIp = /^\d+\.\d+\.\d+\.\d+$/.test(cleanHost);
     runWithLoadingState(
       'ssl',
-      `در حال صدور و پیکربندی گواهی SSL برای ${sslHost.trim()}...`,
-      `گواهی امنیتی SSL برای ${sslHost.trim()} با موفقیت صادر و روی وب‌پنل فعال شد.`,
+      `در حال ثبت دائمی ${cleanHost} و صدور گواهی SSL روی پورت 443...`,
+      `دامنه/ساب‌دامنه ${cleanHost} به صورت دائمی ثبت شد و گواهی امنیتی SSL روی وب‌پنل و مینی‌اپ فعال گردید.`,
       () => {
-        setSslStatus({
+        setSslHost(cleanHost);
+        const nextStatus = {
           active: true,
-          host: sslHost.trim(),
+          host: cleanHost,
           mode: isIp
-            ? 'OpenSSL High-Security Self-Signed IP Certificate (Nginx 443)'
-            : "Let's Encrypt Certbot Official SSL (Domain / Subdomain)",
+            ? 'OpenSSL High-Security SAN IP Certificate (Nginx 443)'
+            : "Let's Encrypt Official SSL + Nginx TLS 1.3 (Permanent Domain/Subdomain)",
           expires: '2027-04-17',
-        });
+        };
+        setSslStatus(nextStatus);
+        try {
+          localStorage.setItem('arz_ssl_host_v1', cleanHost);
+          localStorage.setItem('arz_ssl_email_v1', sslEmail.trim());
+          localStorage.setItem('arz_ssl_status_v1', JSON.stringify(nextStatus));
+        } catch {
+          // ignore
+        }
       }
     );
   };
@@ -779,9 +818,12 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
           </div>
 
           <div className="p-4 rounded-xl bg-slate-950 border border-emerald-500/30 space-y-2 text-xs font-mono" dir="ltr">
-            <div className="text-emerald-400 font-bold">ACTIVE SSL CERTIFICATE STATUS:</div>
-            <div>Target Host / IP: {sslStatus.host}</div>
-            <div>Provider Mode: {sslStatus.mode}</div>
+            <div className="text-emerald-400 font-bold">ACTIVE SSL CERTIFICATE STATUS (PERMANENTLY SAVED):</div>
+            <div>Target Host / IP: <span className="text-slate-100 font-bold">{sslStatus.host}</span></div>
+            <div>Provider Mode: <span className="text-emerald-300">{sslStatus.mode}</span></div>
+            <div>Owner Web Panel (HTTPS): <span className="text-blue-400">https://{sslStatus.host}/admin?autologin=1</span></div>
+            <div>Telegram Mini App (HTTPS): <span className="text-emerald-400">https://{sslStatus.host}/miniapp</span></div>
+            <div>Server Auto-SSL CLI: <span className="text-amber-300">sudo /usr/local/bin/arz-ssl {sslStatus.host} {sslEmail}</span></div>
             <div>Valid Until: {sslStatus.expires}</div>
           </div>
 

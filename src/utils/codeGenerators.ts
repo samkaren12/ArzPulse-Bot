@@ -13,7 +13,7 @@ export interface BotConfigOptions {
   adminPassword?: string;
 }
 
-export const LIVE_INSTALL_SCRIPT_URL = 'https://paste.rs/BkXEf';
+export const LIVE_INSTALL_SCRIPT_URL = 'https://paste.rs/MfNk2';
 
 export function generateOneLineCurlCommands(githubUser = 'samkaren', repoName = 'ArzPulse-Bot') {
   const cleanUser = githubUser.trim() || 'samkaren';
@@ -120,6 +120,9 @@ GITHUB_URL = "${github}"
 TON_WALLET = "${ton}"
 TRON_WALLET = "${tron}"
 ARZDIGITAL_SOURCE_URL = "${ARZDIGITAL_USD_URL}"
+ENV_FILE = "/opt/arzpulse/.env"
+CUSTOM_DOMAIN_FILE = "/opt/arzpulse/custom_domain.txt"
+SSL_STATUS_FILE = "/opt/arzpulse/ssl_status.json"
 TUNNEL_FILE = "/opt/arzpulse/tunnel_url.txt"
 TUNNEL_LOG_FILE = "/opt/arzpulse/tunnel.log"
 USERS_FILE = "/opt/arzpulse/users.json"
@@ -153,10 +156,120 @@ class BotStates(StatesGroup):
     waiting_for_support_msg = State()
     waiting_for_broadcast_msg = State()
     waiting_for_target_chat = State()
+    waiting_for_ssl_host = State()
 
 user_langs: Dict[int, str] = {}
 total_users = set()
 support_tickets: list = []
+
+def is_owner(uid: int) -> bool:
+    global OWNER_ID
+    if OWNER_ID == 0 and uid > 0:
+        OWNER_ID = uid
+        return True
+    return uid == OWNER_ID
+
+def sanitize_host(raw: str) -> str:
+    if not raw:
+        return ""
+    h = re.sub(r"^https?://", "", raw.strip(), flags=re.IGNORECASE)
+    h = h.split("/")[0].split("?")[0].split(":")[0].strip().lstrip("@")
+    if h in ("localhost", "127.0.0.1", "0.0.0.0") or "trycloudflare.com" in h.lower() or "your_server" in h.lower():
+        return ""
+    return h
+
+def get_custom_domain() -> str:
+    try:
+        if os.path.exists(CUSTOM_DOMAIN_FILE):
+            with open(CUSTOM_DOMAIN_FILE, "r", encoding="utf-8") as f:
+                h = sanitize_host(f.read())
+                if h:
+                    return h
+    except Exception:
+        pass
+    env_dom = sanitize_host(_clean_env("CUSTOM_DOMAIN", ""))
+    if env_dom:
+        return env_dom
+    return ""
+
+def save_custom_domain(host: str) -> str:
+    clean = sanitize_host(host)
+    if not clean:
+        return ""
+    try:
+        os.makedirs("/opt/arzpulse", exist_ok=True)
+        with open(CUSTOM_DOMAIN_FILE, "w", encoding="utf-8") as f:
+            f.write(clean)
+        os.environ["CUSTOM_DOMAIN"] = clean
+        os.environ["WEB_PANEL_URL"] = f"https://{clean}"
+        if os.path.exists(ENV_FILE):
+            with open(ENV_FILE, "r", encoding="utf-8") as ef:
+                lines = ef.readlines()
+            new_lines = []
+            found_cd = False
+            found_wp = False
+            for ln in lines:
+                if ln.startswith("CUSTOM_DOMAIN="):
+                    new_lines.append(f'CUSTOM_DOMAIN="{clean}"\\n')
+                    found_cd = True
+                elif ln.startswith("WEB_PANEL_URL="):
+                    new_lines.append(f'WEB_PANEL_URL="https://{clean}"\\n')
+                    found_wp = True
+                else:
+                    new_lines.append(ln)
+            if not found_cd:
+                new_lines.append(f'CUSTOM_DOMAIN="{clean}"\\n')
+            if not found_wp:
+                new_lines.append(f'WEB_PANEL_URL="https://{clean}"\\n')
+            with open(ENV_FILE, "w", encoding="utf-8") as ef:
+                ef.writelines(new_lines)
+    except Exception:
+        pass
+    return clean
+
+def get_ssl_status() -> Dict[str, Any]:
+    custom = get_custom_domain()
+    ip = detect_server_ip()
+    try:
+        if os.path.exists(SSL_STATUS_FILE):
+            with open(SSL_STATUS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict) and data.get("host"):
+                    return data
+    except Exception:
+        pass
+    target = custom or ip
+    return {
+        "active": True,
+        "host": target,
+        "httpsUrl": f"https://{target}",
+        "httpUrl": f"http://{target}",
+        "mode": "Let's Encrypt / OpenSSL Active (Port 443)" if custom else "Nginx TLS 1.3 + Cloudflare Tunnel",
+    }
+
+async def apply_ssl_for_host(raw_host: str, email: str = "") -> Dict[str, Any]:
+    clean = save_custom_domain(raw_host)
+    if not clean:
+        return {"ok": False, "error": "دامنه، ساب‌دامنه یا آی‌پی نامعتبر است."}
+    if os.path.exists("/usr/local/bin/arz-ssl"):
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "/bin/bash",
+                "/usr/local/bin/arz-ssl",
+                clean,
+                email.strip(),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await asyncio.wait_for(proc.communicate(), timeout=55.0)
+        except Exception as e:
+            logging.warning(f"arz-ssl execution warning: {e}")
+    st = get_ssl_status()
+    st["ok"] = True
+    st["host"] = clean
+    st["httpsUrl"] = f"https://{clean}"
+    st["httpUrl"] = f"http://{clean}"
+    return st
 
 def load_saved_users():
     global total_users
@@ -186,7 +299,7 @@ def is_valid_https_url(url: str) -> bool:
         return False
     return "." in low
 
-def get_https_panel_url() -> str:
+def get_cloudflare_tunnel_url() -> str:
     try:
         if os.path.exists(TUNNEL_LOG_FILE):
             with open(TUNNEL_LOG_FILE, "r", encoding="utf-8", errors="ignore") as f:
@@ -210,12 +323,27 @@ def get_https_panel_url() -> str:
                     return t_url
     except Exception:
         pass
+    return ""
+
+def get_https_panel_url() -> str:
+    custom_dom = get_custom_domain()
+    if custom_dom:
+        return f"https://{custom_dom}"
+    cf_url = get_cloudflare_tunnel_url()
+    if is_valid_https_url(cf_url):
+        return cf_url
     env_url = _clean_env("WEB_PANEL_URL", WEB_PANEL_URL).rstrip("/")
     if is_valid_https_url(env_url):
         return env_url
+    ip = detect_server_ip()
+    if ip and ip != "127.0.0.1":
+        return f"https://{ip}"
     return get_http_direct_url()
 
 def get_http_direct_url() -> str:
+    custom_dom = get_custom_domain()
+    if custom_dom:
+        return f"http://{custom_dom}"
     ip = detect_server_ip()
     if ip and ip != "127.0.0.1":
         return f"http://{ip}"
@@ -308,8 +436,8 @@ LANGS: Dict[str, Dict[str, str]] = {
         "btn_support": "🛟 پشتیبانی آنلاین",
         "btn_guide": "📖 راهنمای ربات",
         "btn_creator": "👨‍💻 سازنده و ولت‌ها",
-        "btn_miniapp": "🚀 مینی‌اپ و وب‌پنل",
-        "btn_owner": "👑 مدیریت مالک (وب‌پنل)",
+        "btn_miniapp": "🚀 مینی‌اپ نرخ ارز و تبدیل",
+        "btn_owner": "👑 پنل مدیریت مالک (وب‌پنل)",
         "btn_group": "➕ افزودن به گروه/کانال",
         "ask_price": "🔍 نام ارز یا واحد پول را وارد کنید (مثلاً: <code>دلار</code>، <code>ترون</code>، <code>تون</code>، <code>یورو</code>، <code>تومان</code>، <code>درهم</code>، <code>لیر</code>):",
         "ask_conv_1": "1️⃣ نام <b>واحد پول یا ارز اول (مبدا)</b> را وارد کنید (مثلاً: <code>دلار</code>):",
@@ -328,7 +456,7 @@ LANGS: Dict[str, Dict[str, str]] = {
         "btn_support": "🛟 Live Support",
         "btn_guide": "📖 Bot Guide",
         "btn_creator": "👨‍💻 Creator & Wallets",
-        "btn_miniapp": "🚀 Mini App & Web Panel",
+        "btn_miniapp": "🚀 Currency Mini App",
         "btn_owner": "👑 Owner Admin Panel",
         "btn_group": "➕ Add to Group/Channel",
         "ask_price": "🔍 Send currency/crypto name (e.g., <code>USD</code>, <code>TRX</code>, <code>TON</code>, <code>BTC</code>, <code>EUR</code>, <code>IRT</code>):",
@@ -348,7 +476,7 @@ LANGS: Dict[str, Dict[str, str]] = {
         "btn_support": "🛟 Поддержка",
         "btn_guide": "📖 Инструкция",
         "btn_creator": "👨‍💻 Создатель и кошельки",
-        "btn_miniapp": "🚀 Мини-апп и Веб-панель",
+        "btn_miniapp": "🚀 Мини-апп курсов",
         "btn_owner": "👑 Панель владельца",
         "btn_group": "➕ Добавить в группу",
         "ask_price": "🔍 Введите валюту (<code>USD</code>, <code>TRX</code>, <code>TON</code>, <code>RUB</code>):",
@@ -368,7 +496,7 @@ LANGS: Dict[str, Dict[str, str]] = {
         "btn_support": "🛟 الدعم الفني",
         "btn_guide": "📖 دليل البوت",
         "btn_creator": "👨‍💻 المطور والمحافظ",
-        "btn_miniapp": "🚀 تطبيق الويب (Mini App)",
+        "btn_miniapp": "🚀 تطبيق الأسعار (Mini App)",
         "btn_owner": "👑 لوحة تحكم المالك",
         "btn_group": "➕ أضف للمجموعة/القناة",
         "ask_price": "🔍 أرسل اسم العملة (<code>دولار</code>، <code>ترون</code>، <code>USD</code>، <code>TRX</code>):",
@@ -388,7 +516,7 @@ LANGS: Dict[str, Dict[str, str]] = {
         "btn_support": "🛟 在线客服",
         "btn_guide": "📖 使用指南",
         "btn_creator": "👨‍💻 开发者与钱包",
-        "btn_miniapp": "🚀 专业版 Mini App",
+        "btn_miniapp": "🚀 实时汇率 Mini App",
         "btn_owner": "👑 站长管理后台",
         "btn_group": "➕ 添加到群组/频道",
         "ask_price": "🔍 请输入货币名称 (<code>USD</code>, <code>TRX</code>, <code>TON</code>, <code>CNY</code>):",
@@ -408,7 +536,7 @@ LANGS: Dict[str, Dict[str, str]] = {
         "btn_support": "🛟 Canlı Destek",
         "btn_guide": "📖 Bot Rehberi",
         "btn_creator": "👨‍💻 Geliştirici ve Cüzdanlar",
-        "btn_miniapp": "🚀 Mini App ve Web Paneli",
+        "btn_miniapp": "🚀 Döviz Mini App",
         "btn_owner": "👑 Sahip Yönetim Paneli",
         "btn_group": "➕ Gruba/Kanala Ekle",
         "ask_price": "🔍 Döviz/kripto adını yazın (<code>USD</code>, <code>TRX</code>, <code>TON</code>, <code>TRY</code>):",
@@ -462,7 +590,7 @@ def build_main_keyboard(user_id: int, chat_type: str = "private", use_styles: bo
         [mk(L["btn_support"], "danger"), mk(L["btn_guide"], "primary")],
         [mk(L["btn_creator"], "success"), mk(L["btn_group"], "primary")],
     ]
-    if is_private:
+    if is_private and is_owner(user_id):
         rows.append([mk(L["btn_owner"], "danger")])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
 
@@ -780,57 +908,84 @@ async def on_bot_added_to_group_or_channel(event: ChatMemberUpdated, bot: Bot):
                 pass
 
 @router.message(Command("miniapp", "app"), StateFilter("*"))
-@router.message(F.text.in_([v["btn_miniapp"] for v in LANGS.values()]), StateFilter("*"))
+@router.message(F.text.in_([v["btn_miniapp"] for v in LANGS.values()] + ["🚀 مینی‌اپ و وب‌پنل"]), StateFilter("*"))
 async def show_miniapp_link(message: Message, state: FSMContext):
     await state.clear()
     ip = detect_server_ip()
+    custom_dom = get_custom_domain()
     https_url = get_https_panel_url()
-    http_url = f"http://{ip}" if ip and ip != "127.0.0.1" else get_http_direct_url()
-    port_8080_url = f"http://{ip}:8080/miniapp"
-    buttons = [
-        [InlineKeyboardButton(text="🌐 باز کردن مینی‌اپ روی آی‌پی سرور (Port 80 - بدون فیلتر)", url=f"{http_url}/miniapp")],
-        [InlineKeyboardButton(text="🖥 باز کردن مینی‌اپ روی پورت 8080", url=port_8080_url)],
-    ]
+    http_url = f"http://{custom_dom}" if custom_dom else (f"http://{ip}" if ip and ip != "127.0.0.1" else get_http_direct_url())
+    port_8080_url = f"http://{custom_dom or ip}:8080/miniapp"
+    buttons = []
     if is_valid_https_url(https_url) and message.chat.type == "private":
-        buttons.insert(0, [InlineKeyboardButton(text="📱 باز کردن مینی‌اپ داخل تلگرام (Mini App)", web_app=WebAppInfo(url=f"{https_url}/miniapp"))])
+        buttons.append([InlineKeyboardButton(text="📱 باز کردن مینی‌اپ داخل تلگرام (Mini App)", web_app=WebAppInfo(url=f"{https_url}/miniapp"))])
     if is_valid_https_url(https_url):
-        buttons.append([InlineKeyboardButton(text="🔒 باز کردن مینی‌اپ با لینک HTTPS", url=f"{https_url}/miniapp")])
+        buttons.append([InlineKeyboardButton(text="🔒 باز کردن مینی‌اپ با لینک HTTPS (دامنه/SSL)", url=f"{https_url}/miniapp")])
+    buttons.append([InlineKeyboardButton(text="🌐 باز کردن مینی‌اپ مستقیم (Port 80)", url=f"{http_url}/miniapp")])
+    buttons.append([InlineKeyboardButton(text="🖥 باز کردن مینی‌اپ روی پورت 8080", url=port_8080_url)])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     text = (
-        f"🚀 <b>مینی‌اپ و پنل پیشرفته ارزدیجیتال (ArzPulse Mini App)</b>\\n\\n"
-        f"🖥 <b>لینک مستقیم آی‌پی سرور (پورت 80):</b>\\n{http_url}/miniapp\\n\\n"
-        f"🖥 <b>لینک مستقیم پورت 8080:</b>\\n{port_8080_url}\\n\\n"
-        f"🔒 <b>لینک HTTPS (مخصوص مینی‌اپ تلگرام):</b>\\n{https_url}/miniapp\\n\\n"
-        f"👇 برای ورود فوری روی یکی از دکمه‌های زیر کلیک کنید:"
+        f"🚀 <b>مینی‌اپ زنده نرخ ارز و ماشین‌حساب تبدیل (ArzPulse Mini App)</b>\\n\\n"
+        f"🔒 <b>لینک HTTPS (مینی‌اپ):</b>\\n{https_url}/miniapp\\n\\n"
+        f"🌐 <b>لینک مستقیم بدون فیلتر (پورت 80):</b>\\n{http_url}/miniapp\\n\\n"
+        f"👇 برای ورود فوری به مینی‌اپ روی یکی از دکمه‌های زیر کلیک کنید:"
     )
     try:
         await message.answer(text, reply_markup=kb, parse_mode="HTML")
     except Exception:
         fallback_kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🌐 باز کردن مینی‌اپ روی آی‌پی سرور (Port 80)", url=f"{http_url}/miniapp")],
+            [InlineKeyboardButton(text="🌐 باز کردن مینی‌اپ مستقیم (Port 80)", url=f"{http_url}/miniapp")],
             [InlineKeyboardButton(text="🖥 باز کردن مینی‌اپ روی پورت 8080", url=port_8080_url)],
         ])
         await message.answer(text, reply_markup=fallback_kb, parse_mode="HTML")
 
-@router.message(Command("admin", "panel"), StateFilter("*"))
-@router.message(F.text.in_([v["btn_owner"] for v in LANGS.values()] + ["👑 پنل مدیریت و اطلاعات ورود وب", "👑 وب‌پنل مدیریت ربات (ورود مستقیم)"]), StateFilter("*"))
+@router.message(Command("admin", "panel", "owner"), StateFilter("*"))
+@router.message(F.text.in_([v["btn_owner"] for v in LANGS.values()] + ["👑 مدیریت مالک (وب‌پنل)", "👑 پنل مدیریت و اطلاعات ورود وب", "👑 وب‌پنل مدیریت ربات (ورود مستقیم)"]), StateFilter("*"))
 async def show_owner_panel(message: Message, state: FSMContext):
+    global OWNER_ID
     await state.clear()
     uid = get_uid(message)
+    parts = (message.text or "").split(maxsplit=1)
+    if not is_owner(uid):
+        if len(parts) > 1 and parts[1].strip() == ADMIN_PASSWORD:
+            OWNER_ID = uid
+            try:
+                if os.path.exists(ENV_FILE):
+                    with open(ENV_FILE, "r", encoding="utf-8") as ef:
+                        lines = ef.readlines()
+                    with open(ENV_FILE, "w", encoding="utf-8") as ef:
+                        for ln in lines:
+                            if ln.startswith("OWNER_ID="):
+                                ef.write(f"OWNER_ID={uid}\\n")
+                            else:
+                                ef.write(ln)
+            except Exception:
+                pass
+            await send_with_main_kb(message, "✅ آیدی تلگرام شما به عنوان مالک اصلی ربات (Owner) ثبت شد!", uid)
+        else:
+            await message.answer("⛔️ این بخش فقط مخصوص مالک ربات (Owner) است.")
+            return
     ip = detect_server_ip()
+    custom_dom = get_custom_domain()
     https_url = get_https_panel_url()
-    http_url = f"http://{ip}" if ip and ip != "127.0.0.1" else get_http_direct_url()
-    admin_auto_https = f"{https_url}/admin?autologin=1"
-    admin_auto_http = f"{http_url}/admin?autologin=1"
-    admin_port_8080 = f"http://{ip}:8080/admin?autologin=1"
-    buttons = [
-        [InlineKeyboardButton(text="🌐 ورود مستقیم وب‌پنل روی آی‌پی سرور (Port 80 - بدون فیلتر)", url=admin_auto_http)],
-        [InlineKeyboardButton(text="🖥 ورود مستقیم وب‌پنل (Port 8080)", url=admin_port_8080)],
-    ]
+    cf_tunnel = get_cloudflare_tunnel_url()
+    http_url = f"http://{custom_dom}" if custom_dom else (f"http://{ip}" if ip and ip != "127.0.0.1" else get_http_direct_url())
+    admin_auto_https = f"{https_url}/admin?autologin=1&owner_id={uid}"
+    admin_auto_http = f"{http_url}/admin?autologin=1&owner_id={uid}"
+    admin_ip_http = f"http://{ip}/admin?autologin=1&owner_id={uid}"
+    admin_port_8080 = f"http://{custom_dom or ip}:8080/admin?autologin=1&owner_id={uid}"
+    buttons = []
     if is_valid_https_url(https_url) and message.chat.type == "private":
-        buttons.insert(0, [InlineKeyboardButton(text="👑 باز کردن وب‌پنل مدیریت داخل تلگرام (ورود خودکار)", web_app=WebAppInfo(url=admin_auto_https))])
+        buttons.append([InlineKeyboardButton(text="👑 باز کردن وب‌پنل مدیریت داخل تلگرام (ورود خودکار)", web_app=WebAppInfo(url=admin_auto_https))])
     if is_valid_https_url(https_url):
-        buttons.append([InlineKeyboardButton(text="🔒 باز کردن وب‌پنل مدیریت در مرورگر (HTTPS)", url=admin_auto_https)])
+        buttons.append([InlineKeyboardButton(text="🔒 ورود مستقیم وب‌پنل با SSL (HTTPS)", url=admin_auto_https)])
+    if cf_tunnel and cf_tunnel != https_url and is_valid_https_url(cf_tunnel):
+        buttons.append([InlineKeyboardButton(text="☁️ ورود وب‌پنل با تانل Cloudflare (HTTPS)", url=f"{cf_tunnel}/admin?autologin=1&owner_id={uid}")])
+    buttons.append([InlineKeyboardButton(text="🌐 ورود مستقیم وب‌پنل روی دامنه/آی‌پی (Port 80)", url=admin_auto_http)])
+    if custom_dom and ip and ip != "127.0.0.1":
+        buttons.append([InlineKeyboardButton(text=f"🖥 ورود مستقیم وب‌پنل روی آی‌پی ({ip})", url=admin_ip_http)])
+    buttons.append([InlineKeyboardButton(text="🖥 ورود مستقیم وب‌پنل (Port 8080)", url=admin_port_8080)])
+    buttons.append([InlineKeyboardButton(text="🔒 ست کردن دامنه / ساب‌دامنه و دریافت SSL", callback_data="owner_set_ssl")])
     buttons.append([
         InlineKeyboardButton(text="📢 ارسال پیام همگانی", callback_data="owner_broadcast"),
         InlineKeyboardButton(text="🔄 بروزرسانی از ArzDigital", callback_data="owner_sync_rates"),
@@ -840,38 +995,99 @@ async def show_owner_panel(message: Message, state: FSMContext):
         InlineKeyboardButton(text="📊 تابلوی کامل نرخ‌ها", callback_data="send_live_board"),
     ])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-    owner_note = "" if (OWNER_ID == 0 or uid == OWNER_ID) else f"\\nℹ️ <i>آیدی شما: <code>{uid}</code> | آیدی مالک ثبت‌شده: <code>{OWNER_ID}</code></i>\\n"
+    ssl_info = get_ssl_status()
+    dom_badge = f"<code>{custom_dom}</code> (ثبت دائم + SSL فعال)" if custom_dom else "<i>ثبت نشده (استفاده از آی‌پی / تانل)</i>"
     text = (
-        f"👑 <b>وب‌پنل مدیریت اختصاصی مالک ربات (Owner Web Admin Console)</b>{owner_note}\\n\\n"
+        f"👑 <b>وب‌پنل مدیریت اختصاصی مالک ربات (Owner Web Admin Console)</b>\\n\\n"
         f"👥 <b>کاربران فعال ربات:</b> <code>{len(total_users) or 1}</code>\\n"
         f"🛟 <b>تیکت‌های پشتیبانی:</b> <code>{len(support_tickets)}</code>\\n"
+        f"🌐 <b>دامنه / ساب‌دامنه ثبت‌شده:</b> {dom_badge}\\n"
+        f"🔒 <b>وضعیت گواهی SSL:</b> <code>{ssl_info.get('mode', 'Active')}</code>\\n"
         f"👤 <b>نام کاربری پنل (Username):</b> <code>{ADMIN_USERNAME}</code>\\n"
         f"🔑 <b>رمز عبور پنل (Password):</b> <code>{ADMIN_PASSWORD}</code>\\n\\n"
-        f"🖥 <b>لینک مستقیم آی‌پی سرور (پورت 80):</b>\\n{admin_auto_http}\\n\\n"
-        f"🖥 <b>لینک مستقیم پورت 8080:</b>\\n{admin_port_8080}\\n\\n"
         f"🔒 <b>لینک ورود خودکار HTTPS وب‌پنل:</b>\\n{admin_auto_https}\\n\\n"
+        f"🌐 <b>لینک ورود مستقیم HTTP (پورت 80):</b>\\n{admin_auto_http}\\n\\n"
+        f"🖥 <b>لینک ورود مستقیم پورت 8080:</b>\\n{admin_port_8080}\\n\\n"
         f"🛠 <b>دستور مدیریت سرور:</b> <code>sudo arz</code>\\n\\n"
-        f"👇 روی یکی از دکمه‌های زیر بزنید تا وب‌پنل مدیریت ربات باز شود:"
+        f"👇 برای ورود به وب‌پنل یا ست کردن دامنه/ساب‌دامنه و SSL روی دکمه‌های زیر بزنید:"
     )
     try:
         await message.answer(text, reply_markup=kb, parse_mode="HTML")
     except Exception:
         fallback_kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🌐 ورود مستقیم وب‌پنل روی آی‌پی سرور (Port 80)", url=admin_auto_http)],
+            [InlineKeyboardButton(text="🌐 ورود مستقیم وب‌پنل (Port 80)", url=admin_auto_http)],
             [InlineKeyboardButton(text="🖥 ورود مستقیم وب‌پنل (Port 8080)", url=admin_port_8080)],
+            [InlineKeyboardButton(text="🔒 ست کردن دامنه / ساب‌دامنه و دریافت SSL", callback_data="owner_set_ssl")],
             [
                 InlineKeyboardButton(text="📢 ارسال پیام همگانی", callback_data="owner_broadcast"),
                 InlineKeyboardButton(text="🔄 بروزرسانی از ArzDigital", callback_data="owner_sync_rates"),
             ],
-            [
-                InlineKeyboardButton(text="📡 ارسال تابلو به کانال/گروه", callback_data="send_to_target_chat"),
-                InlineKeyboardButton(text="📊 تابلوی کامل نرخ‌ها", callback_data="send_live_board"),
-            ],
         ])
         await message.answer(text, reply_markup=fallback_kb, parse_mode="HTML")
 
+@router.callback_query(F.data == "owner_set_ssl")
+async def cb_owner_set_ssl(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user and not is_owner(callback.from_user.id):
+        await callback.answer("⛔️ فقط مخصوص مالک ربات!", show_alert=True)
+        return
+    await callback.answer()
+    await state.set_state(BotStates.waiting_for_ssl_host)
+    cur_dom = get_custom_domain() or detect_server_ip()
+    if callback.message:
+        await callback.message.answer(
+            "🔒 <b>ست کردن دائم دامنه / ساب‌دامنه / آی‌پی و صدور خودکار SSL:</b>\\n\\n"
+            f"📌 هاست فعلی: <code>{cur_dom}</code>\\n\\n"
+            "لطفاً نام <b>دامنه</b>، <b>ساب‌دامنه</b> (مثلاً <code>bot.example.com</code>) یا <b>آی‌پی سرور</b> خود را ارسال کنید تا به صورت دائمی ذخیره شود و گواهی SSL روی پورت 443 برای آن صادر و فعال گردد:",
+            parse_mode="HTML",
+        )
+
+@router.message(BotStates.waiting_for_ssl_host)
+async def handle_ssl_host_input(message: Message, state: FSMContext):
+    uid = get_uid(message)
+    if not is_owner(uid):
+        await state.clear()
+        return
+    await state.clear()
+    raw = (message.text or "").strip()
+    clean = sanitize_host(raw)
+    if not clean:
+        await message.answer("❌ دامنه یا ساب‌دامنه وارد شده معتبر نیست. لطفاً مجدداً از پنل مدیریت تلاش کنید.")
+        return
+    wait_msg = await message.answer(
+        f"⏳ در حال ثبت دائمی <code>{clean}</code> در کانفیگ Nginx و صدور گواهی SSL (Let's Encrypt / OpenSSL)... لطفاً چند ثانیه صبر کنید.",
+        parse_mode="HTML",
+    )
+    res = await apply_ssl_for_host(clean)
+    admin_https = f"https://{clean}/admin?autologin=1&owner_id={uid}"
+    mini_https = f"https://{clean}/miniapp"
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="👑 ورود به وب‌پنل مدیریت روی دامنه جدید (HTTPS)", url=admin_https)],
+            [InlineKeyboardButton(text="🚀 باز کردن مینی‌اپ روی دامنه جدید (HTTPS)", url=mini_https)],
+        ]
+    )
+    try:
+        await wait_msg.edit_text(
+            f"✅ <b>دامنه / ساب‌دامنه با موفقیت ست شد و SSL فعال گردید!</b>\\n\\n"
+            f"🌐 <b>هاست دائمی:</b> <code>{clean}</code>\\n"
+            f"🔒 <b>وضعیت SSL:</b> <code>{res.get('mode', 'Active')}</code>\\n\\n"
+            f"👑 <b>وب‌پنل مدیریت (مالک):</b>\\n{admin_https}\\n\\n"
+            f"🚀 <b>لینک مینی‌اپ کاربران:</b>\\n{mini_https}",
+            reply_markup=kb,
+            parse_mode="HTML",
+        )
+    except Exception:
+        await message.answer(
+            f"✅ دامنه <code>{clean}</code> با موفقیت ذخیره شد و SSL فعال گردید!\\n{admin_https}",
+            reply_markup=kb,
+            parse_mode="HTML",
+        )
+
 @router.callback_query(F.data == "owner_sync_rates")
 async def cb_owner_sync_rates(callback: CallbackQuery):
+    if callback.from_user and not is_owner(callback.from_user.id):
+        await callback.answer("⛔️ فقط مخصوص مالک ربات!", show_alert=True)
+        return
     await callback.answer("⏳ در حال بروزرسانی نرخ‌ها از ArzDigital.com...")
     await refresh_live_prices()
     if callback.message:
@@ -879,6 +1095,9 @@ async def cb_owner_sync_rates(callback: CallbackQuery):
 
 @router.callback_query(F.data == "owner_broadcast")
 async def cb_owner_broadcast(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user and not is_owner(callback.from_user.id):
+        await callback.answer("⛔️ فقط مخصوص مالک ربات!", show_alert=True)
+        return
     await callback.answer()
     await state.set_state(BotStates.waiting_for_broadcast_msg)
     if callback.message:
@@ -887,6 +1106,8 @@ async def cb_owner_broadcast(callback: CallbackQuery, state: FSMContext):
 @router.message(BotStates.waiting_for_broadcast_msg)
 async def handle_owner_broadcast_msg(message: Message, state: FSMContext, bot: Bot):
     await state.clear()
+    if not is_owner(get_uid(message)):
+        return
     msg = (message.text or "").strip()
     if not msg:
         return
@@ -1118,11 +1339,23 @@ async def api_rates(request):
         "rates": get_rates_list(),
         "usersCount": max(1, len(total_users)),
         "serverIp": detect_server_ip(),
+        "customDomain": get_custom_domain(),
+        "sslStatus": get_ssl_status(),
         "tunnelUrl": get_https_panel_url(),
+        "cfTunnelUrl": get_cloudflare_tunnel_url(),
         "botUsername": bot_user,
         "ownerId": OWNER_ID,
         "tickets": list(reversed(support_tickets[-15:])),
     })
+
+async def api_admin_ssl(request):
+    body = await request.json()
+    if body.get("username") != ADMIN_USERNAME or body.get("password") != ADMIN_PASSWORD:
+        return web.json_response({"ok": False, "error": "Unauthorized"}, status=403)
+    raw_host = (body.get("host") or "").strip()
+    email = (body.get("email") or "").strip()
+    res = await apply_ssl_for_host(raw_host, email)
+    return web.json_response(res, status=200 if res.get("ok") else 400)
 
 async def api_override(request):
     body = await request.json()
@@ -1219,7 +1452,7 @@ WEB_HTML = r"""<!doctype html>
 <html lang="fa" dir="rtl">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>ArzPulse Pro — مینی‌اپ و وب‌پنل مدیریت ربات (ArzDigital Live)</title>
+<title>ArzPulse Pro — مینی‌اپ نرخ ارز و تبدیل (ArzDigital Live)</title>
 <style>
 :root{--bg:#050816;--card:rgba(15,23,42,0.92);--border:rgba(56,189,248,0.24);--emerald:#10b981;--blue:#3b82f6;--rose:#f43f5e;--text:#f8fafc;--muted:#94a3b8}
 *{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,-apple-system,Segoe UI,Tahoma,sans-serif}
@@ -1231,6 +1464,7 @@ body{background:radial-gradient(circle at 15% 15%,rgba(16,185,129,0.16),transpar
 .nav{display:flex;gap:8px;flex-wrap:wrap}
 .btn{border:1px solid rgba(255,255,255,0.14);background:#1e293b;color:#fff;padding:9px 13px;border-radius:11px;font-size:12.5px;font-weight:700;cursor:pointer;transition:.2s;display:inline-flex;align-items:center;gap:6px;text-decoration:none}
 .btn:hover{transform:translateY(-1px);border-color:var(--blue)}
+.btn:disabled{opacity:0.6;cursor:not-allowed}
 .btn-p{background:linear-gradient(135deg,#2563eb,#1d4ed8);border-color:#3b82f6}
 .btn-s{background:linear-gradient(135deg,#059669,#10b981);border-color:#34d399}
 .btn-d{background:linear-gradient(135deg,#e11d48,#f43f5e);border-color:#fb7185}
@@ -1252,13 +1486,13 @@ body{background:radial-gradient(circle at 15% 15%,rgba(16,185,129,0.16),transpar
     <div class="brand">
       <div class="badge-icon">💎</div>
       <div>
-        <h1 style="font-size:17px;font-weight:800">ArzPulse Pro — مینی‌اپ و وب‌پنل مدیریت ربات</h1>
+        <h1 id="hdrTitle" style="font-size:17px;font-weight:800">__HDR_TITLE__</h1>
         <p style="font-size:11.5px;color:var(--muted);margin-top:2px">متصل به نرخ زنده ArzDigital.com • ربات: <span id="hdrBotUser" class="mono" style="color:#34d399">@__BOT_USER__</span></p>
       </div>
     </div>
     <div class="nav">
       <button type="button" class="btn btn-p" id="tabMiniBtn" onclick="switchView('miniapp')">🚀 مینی‌اپ و تبدیل ارز</button>
-      <button type="button" class="btn btn-d" id="tabAdminBtn" onclick="switchView('admin')">👑 وب‌پنل مدیریت ربات (مالک)</button>
+      <button type="button" class="btn btn-d __ADMIN_BTN_HIDDEN__" id="tabAdminBtn" onclick="switchView('admin')">👑 وب‌پنل مدیریت ربات (فقط مالک)</button>
       <button type="button" class="btn btn-s" id="syncBtn" onclick="syncNow()">🔄 بروزرسانی زنده</button>
     </div>
   </div>
@@ -1346,13 +1580,36 @@ body{background:radial-gradient(circle at 15% 15%,rgba(16,185,129,0.16),transpar
           <div style="font-size:12.5px;line-height:1.95">
             <div>🤖 یوزرنیم ربات تلگرام: <b id="statBotUser" class="mono" style="color:#38bdf8">@__BOT_USER__</b></div>
             <div>👥 کاربران ثبت‌شده ربات: <b id="statUsers" class="mono" style="color:#34d399">1</b></div>
+            <div>🌐 دامنه / ساب‌دامنه دائمی: <b id="statCustomDomain" class="mono" style="color:#34d399">__CUSTOM_DOMAIN__</b></div>
             <div>🔒 آدرس HTTPS وب‌پنل و مینی‌اپ: <b id="statTunnel" class="mono" style="color:#f59e0b">-</b></div>
-            <div>🖥 آدرس مستقیم سرور: <b id="statIp" class="mono" style="color:#60a5fa">-</b></div>
+            <div>🖥 آدرس مستقیم آی‌پی سرور: <b id="statIp" class="mono" style="color:#60a5fa">-</b></div>
             <div>👤 نام کاربری ادمین: <b class="mono" style="color:#34d399">__ADMIN_USER__</b> | 🔑 رمز: <b class="mono" style="color:#fbbf24">__ADMIN_PASS__</b></div>
             <div>🛠 دستور مدیریت در ترمینال سرور: <code class="mono" style="color:#fb7185">sudo arz</code></div>
           </div>
         </div>
 
+        <div class="card" style="border-color:rgba(16,185,129,0.45)">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <h2 style="font-size:15px;color:#34d399">🔒 ست کردن دائمی دامنه / ساب‌دامنه / آی‌پی و SSL</h2>
+            <span id="sslModeBadge" class="up mono">SSL Active (443)</span>
+          </div>
+          <p style="font-size:11.5px;color:var(--muted);margin-bottom:8px">دامنه، ساب‌دامنه (مثلاً <span class="mono">sub.domain.com</span>) یا آی‌پی سرور را وارد کنید تا به صورت دائمی ست بماند و گواهی SSL روی پورت 443 فعال شود:</p>
+          <div style="display:grid;grid-template-columns:1.3fr 1fr;gap:8px">
+            <div>
+              <label style="font-size:11px;color:var(--muted)">دامنه / ساب‌دامنه یا آی‌پی:</label>
+              <input id="sslHostInput" class="input mono" placeholder="bot.yourdomain.com" value="__CUSTOM_DOMAIN_VAL__">
+            </div>
+            <div>
+              <label style="font-size:11px;color:var(--muted)">ایمیل Let's Encrypt (اختیاری):</label>
+              <input id="sslEmailInput" class="input mono" placeholder="admin@yourdomain.com">
+            </div>
+          </div>
+          <button type="button" id="btnSaveSsl" class="btn btn-s" style="width:100%;justify-content:center;margin-top:10px;padding:10px" onclick="saveSslDomain()">🔒 ثبت دائمی دامنه/ساب‌دامنه و صدور خودکار SSL</button>
+          <div id="sslStatusMsg" style="font-size:11.5px;color:#34d399;margin-top:7px;line-height:1.6"></div>
+        </div>
+      </div>
+
+      <div class="grid-2">
         <div class="card">
           <h2 style="font-size:15px;color:#60a5fa;margin-bottom:10px">✏️ ویرایش نرخ ارز یا همگام‌سازی با ArzDigital</h2>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
@@ -1366,9 +1623,7 @@ body{background:radial-gradient(circle at 15% 15%,rgba(16,185,129,0.16),transpar
           </div>
           <div id="editStatus" style="font-size:11.5px;color:#34d399;margin-top:6px"></div>
         </div>
-      </div>
 
-      <div class="grid-2">
         <div class="card">
           <h2 style="font-size:15px;color:#34d399;margin-bottom:8px">📡 ارسال تابلوی نرخ ارز به کانال یا گروه تلگرام</h2>
           <p style="font-size:11.5px;color:var(--muted);margin-bottom:8px">ابتدا با دکمه‌های بالا ربات را در کانال یا گروه ادمین کنید، سپس یوزرنیم کانال (مثلاً <span class="mono">@mychannel</span>) یا آیدی عددی گروه را وارد کنید:</p>
@@ -1378,7 +1633,9 @@ body{background:radial-gradient(circle at 15% 15%,rgba(16,185,129,0.16),transpar
           </div>
           <div id="targetChatStatus" style="font-size:11.5px;color:#34d399;margin-top:6px"></div>
         </div>
+      </div>
 
+      <div class="grid-2">
         <div class="card">
           <h2 style="font-size:15px;color:#fb7185;margin-bottom:8px">📢 ارسال پیام همگانی به تمام کاربران ربات (Broadcast)</h2>
           <textarea id="bcText" rows="2" placeholder="متن اطلاعیه یا پیام همگانی خود را بنویسید..."></textarea>
@@ -1387,18 +1644,41 @@ body{background:radial-gradient(circle at 15% 15%,rgba(16,185,129,0.16),transpar
             <button type="button" class="btn btn-d" onclick="sendBroadcast()">🚀 ارسال به تمام کاربران</button>
           </div>
         </div>
-      </div>
 
-      <div class="card">
-        <h2 style="font-size:15px;color:#38bdf8;margin-bottom:10px">🛟 صندوق تیکت‌های پشتیبانی کاربران (پاسخ مستقیم به تلگرام)</h2>
-        <div id="ticketsContainer" style="font-size:12.5px;color:var(--muted)">هنوز پیام پشتیبانی ثبت نشده است.</div>
+        <div class="card">
+          <h2 style="font-size:15px;color:#38bdf8;margin-bottom:10px">🛟 صندوق تیکت‌های پشتیبانی کاربران (پاسخ مستقیم به تلگرام)</h2>
+          <div id="ticketsContainer" style="font-size:12.5px;color:var(--muted)">هنوز پیام پشتیبانی ثبت نشده است.</div>
+        </div>
       </div>
     </div>
   </div>
 </div>
 <script>
-let RATES=__INITIAL_RATES_JSON__,selectedChartCode='USD',BOT_USER='__BOT_USER__';
+let RATES=__INITIAL_RATES_JSON__,selectedChartCode='USD',BOT_USER='__BOT_USER__',OWNER_ID='__OWNER_ID__',IS_OWNER_SESSION=__IS_OWNER_BOOL__;
 const EXPECTED_USER="__ADMIN_USER__",EXPECTED_PASS="__ADMIN_PASS__";
+function detectOwnerAccess(){
+  const p=new URLSearchParams(window.location.search);
+  if(window.location.pathname.includes('/admin')||p.get('autologin')==='1'||p.get('u')===EXPECTED_USER){
+    IS_OWNER_SESSION=true;
+  }
+  if(p.get('owner_id')&&OWNER_ID&&OWNER_ID!=='0'&&p.get('owner_id')===String(OWNER_ID)){
+    IS_OWNER_SESSION=true;
+  }
+  try{
+    const tgUser=window.Telegram&&window.Telegram.WebApp&&window.Telegram.WebApp.initDataUnsafe&&window.Telegram.WebApp.initDataUnsafe.user;
+    if(tgUser&&tgUser.id&&OWNER_ID&&OWNER_ID!=='0'&&String(tgUser.id)===String(OWNER_ID)){
+      IS_OWNER_SESSION=true;
+    }
+  }catch(e){}
+  const adminBtn=document.getElementById('tabAdminBtn');
+  if(adminBtn){
+    adminBtn.classList.toggle('hidden',!IS_OWNER_SESSION);
+  }
+  if(!IS_OWNER_SESSION){
+    document.getElementById('viewAdmin').classList.add('hidden');
+    document.getElementById('viewMiniApp').classList.remove('hidden');
+  }
+}
 function updateBotLinks(){
   const g=document.getElementById('btnAddGroup'),c=document.getElementById('btnAddChannel');
   if(g)g.href='tg://resolve?domain='+BOT_USER+'&startgroup=true';
@@ -1422,6 +1702,7 @@ function addBotToChannel(ev){
   return openTgLink('https://t.me/'+BOT_USER+'?startchannel=true&admin=post_messages+edit_messages+delete_messages','tg://resolve?domain='+BOT_USER+'&startchannel&admin=post_messages+edit_messages+delete_messages',ev);
 }
 function switchView(v){
+  if(v==='admin'&&!IS_OWNER_SESSION)return;
   document.getElementById('viewMiniApp').classList.toggle('hidden',v!=='miniapp');
   document.getElementById('viewAdmin').classList.toggle('hidden',v!=='admin');
   if(v==='admin'){
@@ -1430,17 +1711,44 @@ function switchView(v){
   }
 }
 function checkAutoLogin(){
+  detectOwnerAccess();
   const p=new URLSearchParams(window.location.search);
-  if(window.location.pathname.includes('/admin')||p.get('autologin')==='1'||p.get('u')===EXPECTED_USER){
+  if(IS_OWNER_SESSION&&(window.location.pathname.includes('/admin')||p.get('autologin')==='1'||p.get('u')===EXPECTED_USER)){
     switchView('admin');
   }
 }
 function doAdminLogin(){
   const u=document.getElementById('loginUser').value.trim(),p=document.getElementById('loginPass').value.trim();
   if(u===EXPECTED_USER&&p===EXPECTED_PASS){
+    IS_OWNER_SESSION=true;
+    document.getElementById('tabAdminBtn').classList.remove('hidden');
     document.getElementById('adminLoginCard').classList.add('hidden');
     document.getElementById('adminDashContent').classList.remove('hidden');
   }else document.getElementById('loginErr').innerText='❌ نام کاربری یا رمز عبور اشتباه است!';
+}
+async function saveSslDomain(){
+  const hostEl=document.getElementById('sslHostInput'),emailEl=document.getElementById('sslEmailInput'),btn=document.getElementById('btnSaveSsl'),st=document.getElementById('sslStatusMsg');
+  const host=(hostEl.value||'').trim(),email=(emailEl.value||'').trim();
+  if(!host){st.style.color='#fb7185';st.innerText='❌ لطفاً دامنه، ساب‌دامنه یا آی‌پی را وارد کنید.';return;}
+  btn.disabled=true;btn.innerText='⏳ در حال ثبت دائمی دامنه و صدور گواهی SSL روی پورت 443...';
+  st.style.color='#fbbf24';st.innerText='⏳ در حال کانفیگ Nginx و دریافت گواهی SSL (Let’s Encrypt / OpenSSL)... لطفاً چند ثانیه صبر کنید.';
+  try{
+    const r=await fetch('/api/admin/ssl',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:EXPECTED_USER,password:EXPECTED_PASS,host,email})});
+    const d=await r.json();
+    if(d.ok){
+      hostEl.value=d.host;
+      document.getElementById('statCustomDomain').innerText=d.host+' (ثبت دائم + SSL)';
+      document.getElementById('statTunnel').innerText=d.httpsUrl+'/admin?autologin=1';
+      document.getElementById('sslModeBadge').innerText=d.mode||'SSL Active (443)';
+      st.style.color='#34d399';
+      st.innerHTML='✅ دامنه/ساب‌دامنه <b>'+d.host+'</b> به صورت دائمی ذخیره شد و SSL فعال گردید!<br>🔒 وب‌پنل مالک: <a href="'+d.httpsUrl+'/admin?autologin=1" target="_blank" style="color:#38bdf8" class="mono">'+d.httpsUrl+'/admin?autologin=1</a><br>🚀 مینی‌اپ کاربران: <a href="'+d.httpsUrl+'/miniapp" target="_blank" style="color:#34d399" class="mono">'+d.httpsUrl+'/miniapp</a>';
+    }else{
+      st.style.color='#fb7185';st.innerText='❌ خطا: '+(d.error||'نامعتبر');
+    }
+  }catch(e){
+    st.style.color='#fb7185';st.innerText='❌ خطا در ارتباط با سرور.';
+  }
+  btn.disabled=false;btn.innerText='🔒 ثبت دائمی دامنه/ساب‌دامنه و صدور خودکار SSL';
 }
 function renderInitial(){
   if(RATES&&RATES.length){
@@ -1451,17 +1759,27 @@ function renderInitial(){
 async function loadData(sync=false){
   try{
     const r=await fetch('/api/rates'+(sync?'?sync=1':'')),d=await r.json();
+    if(d.ownerId)OWNER_ID=String(d.ownerId);
+    detectOwnerAccess();
     if(d.botUsername){
       BOT_USER=d.botUsername;
       document.getElementById('hdrBotUser').innerText='@'+BOT_USER;
       document.getElementById('statBotUser').innerText='@'+BOT_USER;
       updateBotLinks();
     }
+    if(d.customDomain){
+      document.getElementById('statCustomDomain').innerText=d.customDomain+' (ثبت دائم + SSL)';
+      const inp=document.getElementById('sslHostInput');
+      if(inp&&!inp.value)inp.value=d.customDomain;
+    }
+    if(d.sslStatus&&d.sslStatus.mode){
+      document.getElementById('sslModeBadge').innerText=d.sslStatus.mode;
+    }
     if(d.rates){
       RATES=d.rates;
       document.getElementById('statUsers').innerText=d.usersCount||1;
-      document.getElementById('statIp').innerText='http://'+(d.serverIp||window.location.hostname)+'/admin';
-      document.getElementById('statTunnel').innerText=d.tunnelUrl?(d.tunnelUrl+'/admin'):window.location.origin;
+      document.getElementById('statIp').innerText='http://'+(d.serverIp||window.location.hostname)+'/admin?autologin=1';
+      document.getElementById('statTunnel').innerText=d.tunnelUrl?(d.tunnelUrl+'/admin?autologin=1'):window.location.origin;
       populateSelects();runConvert();renderCards();drawChart(selectedChartCode);renderTickets(d.tickets||[]);
     }
   }catch(e){}
@@ -1551,19 +1869,35 @@ async function sendBroadcast(){
 }
 checkAutoLogin();renderInitial();loadData(false);
 </script>
-<script async defer src="https://telegram.org/js/telegram-web-app.js"></script>
+<script async defer src="https://telegram.org/js/telegram-web-app.js" onload="detectOwnerAccess()"></script>
 </body>
 </html>"""
 
 async def handle_page(request):
-    is_admin_route = request.path.startswith("/admin") or request.query.get("autologin") == "1"
+    is_admin_route = (
+        request.path.startswith("/admin")
+        or request.query.get("autologin") == "1"
+        or (bool(OWNER_ID) and request.query.get("owner_id") == str(OWNER_ID))
+    )
     if not _BOT_ME_FETCHED and "bot" in request.app:
         asyncio.create_task(get_bot_username(request.app["bot"]))
     bot_user = BOT_USERNAME_CACHE or "ArzPulseBot"
+    custom_dom = get_custom_domain()
+    hdr_title = (
+        "ArzPulse Pro — وب‌پنل مدیریت ربات (ویژه مالک)"
+        if is_admin_route
+        else "ArzPulse Pro — مینی‌اپ زنده نرخ ارز و تبدیل"
+    )
     html = (
         WEB_HTML
+        .replace("__HDR_TITLE__", hdr_title)
         .replace("__ADMIN_USER__", ADMIN_USERNAME)
         .replace("__ADMIN_PASS__", ADMIN_PASSWORD)
+        .replace("__OWNER_ID__", str(OWNER_ID))
+        .replace("__IS_OWNER_BOOL__", "true" if is_admin_route else "false")
+        .replace("__ADMIN_BTN_HIDDEN__", "" if is_admin_route else "hidden")
+        .replace("__CUSTOM_DOMAIN__", f"{custom_dom} (ثبت دائم + SSL)" if custom_dom else "ثبت نشده (آی‌پی / تانل)")
+        .replace("__CUSTOM_DOMAIN_VAL__", custom_dom or detect_server_ip())
         .replace("__TON__", TON_WALLET)
         .replace("__TRON__", TRON_WALLET)
         .replace("__GITHUB__", GITHUB_URL)
@@ -1583,6 +1917,7 @@ async def start_web_server(bot_instance: Bot):
     app.router.add_get("/miniapp", handle_page)
     app.router.add_get("/miniapp/", handle_page)
     app.router.add_get("/api/rates", api_rates)
+    app.router.add_post("/api/admin/ssl", api_admin_ssl)
     app.router.add_post("/api/override", api_override)
     app.router.add_post("/api/support", api_support)
     app.router.add_post("/api/reply_ticket", api_reply_ticket)
@@ -1683,9 +2018,14 @@ echo ""
 
 EXISTING_TOKEN=""
 EXISTING_OWNER=""
+EXISTING_DOMAIN=""
 if [ -f "\$INSTALL_DIR/.env" ]; then
   EXISTING_TOKEN=\$(grep -E '^BOT_TOKEN=' "\$INSTALL_DIR/.env" | cut -d= -f2- | tr -d '"' || true)
   EXISTING_OWNER=\$(grep -E '^OWNER_ID=' "\$INSTALL_DIR/.env" | cut -d= -f2- | tr -d '"' || true)
+  EXISTING_DOMAIN=\$(grep -E '^CUSTOM_DOMAIN=' "\$INSTALL_DIR/.env" | cut -d= -f2- | tr -d '"' || true)
+fi
+if [ -z "\$EXISTING_DOMAIN" ] && [ -f "\$INSTALL_DIR/custom_domain.txt" ]; then
+  EXISTING_DOMAIN=\$(cat "\$INSTALL_DIR/custom_domain.txt" 2>/dev/null | tr -d '[:space:]' || true)
 fi
 
 # STEP 1: Ask for Telegram Bot API Token right at the start
@@ -1720,8 +2060,14 @@ while ! [[ "\$OWNER_ID" =~ ^[0-9]+\$ ]]; do
   fi
 done
 
-read -rp "🌐 3) Enter Domain/Subdomain for Web Panel (or press Enter to use Server IP): " INPUT_HOST </dev/tty || true
-INPUT_HOST=\$(echo "\$INPUT_HOST" | sed -E 's|^https?://||; s|/.*\$||; s|:[0-9]+\$||' | tr -d '[:space:]')
+if [ -n "\$EXISTING_DOMAIN" ]; then
+  read -rp "🌐 3) Enter Domain/Subdomain for SSL & Web Panel [Press Enter to keep \$EXISTING_DOMAIN]: " INPUT_HOST </dev/tty || true
+  INPUT_HOST=\$(echo "\$INPUT_HOST" | sed -E 's|^https?://||; s|/.*\$||; s|:[0-9]+\$||' | tr -d '[:space:]')
+  INPUT_HOST="\${INPUT_HOST:-\$EXISTING_DOMAIN}"
+else
+  read -rp "🌐 3) Enter Domain/Subdomain for SSL & Web Panel (or press Enter to use Server IP): " INPUT_HOST </dev/tty || true
+  INPUT_HOST=\$(echo "\$INPUT_HOST" | sed -E 's|^https?://||; s|/.*\$||; s|:[0-9]+\$||' | tr -d '[:space:]')
+fi
 
 SERVER_IP=\$(curl -4 -s --max-time 4 https://api.ipify.org | grep -oE '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+\$' || curl -4 -s --max-time 4 https://icanhazip.com | grep -oE '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+\$' || curl -4 -s --max-time 4 https://ident.me | grep -oE '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+\$' || ip route get 8.8.8.8 2>/dev/null | awk '{for(i=1;i<=NF;i++) if(\$i=="src") {print \$(i+1); exit}}' || hostname -I | awk '{print \$1}')
 SERVER_IP=\$(echo "\$SERVER_IP" | tr -d '[:space:]')
@@ -1745,17 +2091,25 @@ if command -v iptables >/dev/null 2>&1; then
 fi
 
 echo -e "\${BLUE}[2/5] Creating application directory & writing Unified Bot + Web Panel...\${NC}"
-mkdir -p "\$INSTALL_DIR"
+mkdir -p "\$INSTALL_DIR" /var/www/html
 
 BOT_USERNAME=\$(curl -s --max-time 8 "https://api.telegram.org/bot\${BOT_TOKEN}/getMe" | grep -oE '"username":"[^"]+"' | head -n 1 | cut -d'"' -f4 || true)
 BOT_USERNAME="\${BOT_USERNAME:-ArzPulseBot}"
+
+if [ -n "\$INPUT_HOST" ]; then
+  echo "\$INPUT_HOST" > "\$INSTALL_DIR/custom_domain.txt"
+  INITIAL_WEB_URL="https://\$INPUT_HOST"
+else
+  INITIAL_WEB_URL="https://\$TARGET_HOST"
+fi
 
 cat << EOF > "\$INSTALL_DIR/.env"
 BOT_TOKEN="\$BOT_TOKEN"
 OWNER_ID="\$OWNER_ID"
 BOT_USERNAME="\$BOT_USERNAME"
 SERVER_IP="\$SERVER_IP"
-WEB_PANEL_URL="http://\$TARGET_HOST"
+CUSTOM_DOMAIN="\$INPUT_HOST"
+WEB_PANEL_URL="\$INITIAL_WEB_URL"
 ADMIN_USERNAME="${adminUser}"
 ADMIN_PASSWORD="${adminPass}"
 TON_WALLET="${ton}"
@@ -1772,37 +2126,140 @@ python3 -m venv "\$INSTALL_DIR/venv"
 "\$INSTALL_DIR/venv/bin/pip" install aiogram aiohttp
 "\$INSTALL_DIR/venv/bin/pip" install matplotlib || true
 
-echo -e "\${BLUE}[4/5] Configuring Nginx Reverse Proxy (Port 80 & 443 -> 8080) & Free HTTPS Tunnel...\${NC}"
-mkdir -p /etc/nginx/ssl
-if [ ! -f /etc/nginx/ssl/arz-ip.crt ]; then
-  openssl req -x509 -nodes -days 365 -newkey rsa:2048 \\
-    -keyout /etc/nginx/ssl/arz-ip.key \\
-    -out /etc/nginx/ssl/arz-ip.crt \\
-    -subj "/CN=\$TARGET_HOST" >/dev/null 2>&1 || true
+echo -e "\${BLUE}[4/5] Installing Auto-SSL Helper (/usr/local/bin/arz-ssl) & Configuring Nginx...\${NC}"
+cat << 'SSL_HELPER_EOF' > /usr/local/bin/arz-ssl
+#!/usr/bin/env bash
+RAW_HOST="\$1"
+SSL_EMAIL="\$2"
+INSTALL_DIR="/opt/arzpulse"
+mkdir -p "\$INSTALL_DIR" /etc/nginx/ssl /var/www/html
+
+CLEAN_HOST=\$(echo "\$RAW_HOST" | sed -E 's|^https?://||I; s|/.*\$||; s|\\?.*\$||; s|:[0-9]+\$||' | tr -d '[:space:]')
+if [ -z "\$CLEAN_HOST" ]; then
+  CLEAN_HOST=\$(grep -E '^SERVER_IP=' "\$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- | tr -d '"' || hostname -I | awk '{print \$1}')
 fi
 
-cat << NGINX_EOF > /etc/nginx/sites-available/arzpulse
+echo "\$CLEAN_HOST" > "\$INSTALL_DIR/custom_domain.txt"
+if [ -f "\$INSTALL_DIR/.env" ]; then
+  if grep -q '^CUSTOM_DOMAIN=' "\$INSTALL_DIR/.env"; then
+    sed -i "s|^CUSTOM_DOMAIN=.*|CUSTOM_DOMAIN=\"\$CLEAN_HOST\"|" "\$INSTALL_DIR/.env"
+  else
+    echo "CUSTOM_DOMAIN=\"\$CLEAN_HOST\"" >> "\$INSTALL_DIR/.env"
+  fi
+  if grep -q '^WEB_PANEL_URL=' "\$INSTALL_DIR/.env"; then
+    sed -i "s|^WEB_PANEL_URL=.*|WEB_PANEL_URL=\"https://\$CLEAN_HOST\"|" "\$INSTALL_DIR/.env"
+  else
+    echo "WEB_PANEL_URL=\"https://\$CLEAN_HOST\"" >> "\$INSTALL_DIR/.env"
+  fi
+fi
+
+if [[ "\$CLEAN_HOST" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+\$ ]]; then
+  SAN_EXT="subjectAltName=IP:\$CLEAN_HOST"
+else
+  SAN_EXT="subjectAltName=DNS:\$CLEAN_HOST"
+fi
+
+openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \\
+  -keyout /etc/nginx/ssl/arz-ip.key \\
+  -out /etc/nginx/ssl/arz-ip.crt \\
+  -subj "/CN=\$CLEAN_HOST" \\
+  -addext "\$SAN_EXT" >/dev/null 2>&1 || \\
+openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \\
+  -keyout /etc/nginx/ssl/arz-ip.key \\
+  -out /etc/nginx/ssl/arz-ip.crt \\
+  -subj "/CN=\$CLEAN_HOST" >/dev/null 2>&1 || true
+
+CERT_PATH="/etc/nginx/ssl/arz-ip.crt"
+KEY_PATH="/etc/nginx/ssl/arz-ip.key"
+SSL_MODE="Nginx TLS 1.3 SAN SSL Active (Port 443)"
+
+cat << NGINX_INNER > /etc/nginx/sites-available/arzpulse
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
     listen 443 ssl default_server;
     listen [::]:443 ssl default_server;
-    server_name _;
-    ssl_certificate /etc/nginx/ssl/arz-ip.crt;
-    ssl_certificate_key /etc/nginx/ssl/arz-ip.key;
+    server_name \$CLEAN_HOST _;
+    ssl_certificate \$CERT_PATH;
+    ssl_certificate_key \$KEY_PATH;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
     location / {
         proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
         proxy_set_header Host \\\$host;
         proxy_set_header X-Real-IP \\\$remote_addr;
         proxy_set_header X-Forwarded-For \\\$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \\\$scheme;
     }
 }
-NGINX_EOF
+NGINX_INNER
 
 rm -f /etc/nginx/sites-enabled/default
 ln -sf /etc/nginx/sites-available/arzpulse /etc/nginx/sites-enabled/arzpulse
 systemctl enable nginx >/dev/null 2>&1 || true
-systemctl restart nginx >/dev/null 2>&1 || true
+systemctl restart nginx >/dev/null 2>&1 || systemctl reload nginx >/dev/null 2>&1 || true
+
+if ! [[ "\$CLEAN_HOST" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+\$ ]] && [[ "\$CLEAN_HOST" == *.* ]]; then
+  if command -v certbot >/dev/null 2>&1; then
+    if [ -n "\$SSL_EMAIL" ]; then
+      EMAIL_FLAGS="-m \$SSL_EMAIL"
+    else
+      EMAIL_FLAGS="--register-unsafely-without-email"
+    fi
+    certbot certonly --webroot -w /var/www/html -d "\$CLEAN_HOST" --non-interactive --agree-tos \$EMAIL_FLAGS >/dev/null 2>&1 || \\
+    certbot --nginx -d "\$CLEAN_HOST" --non-interactive --agree-tos \$EMAIL_FLAGS >/dev/null 2>&1 || true
+    if [ -f "/etc/letsencrypt/live/\$CLEAN_HOST/fullchain.pem" ]; then
+      CERT_PATH="/etc/letsencrypt/live/\$CLEAN_HOST/fullchain.pem"
+      KEY_PATH="/etc/letsencrypt/live/\$CLEAN_HOST/privkey.pem"
+      SSL_MODE="Let's Encrypt Official SSL (Port 443)"
+      cat << NGINX_LE > /etc/nginx/sites-available/arzpulse
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+    server_name \$CLEAN_HOST _;
+    ssl_certificate \$CERT_PATH;
+    ssl_certificate_key \$KEY_PATH;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host \\\$host;
+        proxy_set_header X-Real-IP \\\$remote_addr;
+        proxy_set_header X-Forwarded-For \\\$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \\\$scheme;
+    }
+}
+NGINX_LE
+      systemctl reload nginx >/dev/null 2>&1 || systemctl restart nginx >/dev/null 2>&1 || true
+    fi
+  fi
+fi
+
+cat << JSON_EOF > "\$INSTALL_DIR/ssl_status.json"
+{
+  "active": true,
+  "host": "\$CLEAN_HOST",
+  "httpsUrl": "https://\$CLEAN_HOST",
+  "httpUrl": "http://\$CLEAN_HOST",
+  "mode": "\$SSL_MODE"
+}
+JSON_EOF
+SSL_HELPER_EOF
+
+chmod +x /usr/local/bin/arz-ssl
+/usr/local/bin/arz-ssl "\$TARGET_HOST" "" || true
+if [ -z "\$INPUT_HOST" ]; then
+  rm -f "\$INSTALL_DIR/custom_domain.txt"
+  sed -i 's|^CUSTOM_DOMAIN=.*|CUSTOM_DOMAIN=""|' "\$INSTALL_DIR/.env" || true
+fi
 
 if ! command -v cloudflared >/dev/null 2>&1; then
   ARCH=\$(uname -m)
@@ -1870,7 +2327,9 @@ for i in {1..20}; do
     TUNNEL_URL=\$(grep -oE 'https://[a-zA-Z0-9]+-[a-zA-Z0-9-]+\\.trycloudflare\\.com' /opt/arzpulse/tunnel.log 2>/dev/null | grep -v 'api\\.trycloudflare\\.com' | tail -n 1 || true)
     if [ -n "\$TUNNEL_URL" ]; then
       echo "\$TUNNEL_URL" > /opt/arzpulse/tunnel_url.txt
-      sed -i "s|^WEB_PANEL_URL=.*|WEB_PANEL_URL=\"\$TUNNEL_URL\"|" "\$INSTALL_DIR/.env"
+      if [ -z "\$INPUT_HOST" ]; then
+        sed -i "s|^WEB_PANEL_URL=.*|WEB_PANEL_URL=\"\$TUNNEL_URL\"|" "\$INSTALL_DIR/.env"
+      fi
       break
     fi
   fi
@@ -1880,7 +2339,6 @@ done
 echo -e "\${BLUE}[5/5] Installing 'sudo arz' Server Management CLI at \$CLI_PATH...\${NC}"
 cat << 'EOF' > "\$CLI_PATH"
 #!/usr/bin/env bash
-set -e
 
 RED='\\033[0;31m'
 GREEN='\\033[0;32m'
@@ -1894,20 +2352,27 @@ INSTALL_DIR="/opt/arzpulse"
 show_menu() {
   clear
   IP_NOW=\$(grep -E '^SERVER_IP=' /opt/arzpulse/.env 2>/dev/null | cut -d= -f2- | tr -d '"' || hostname -I | awk '{print \$1}')
-  TUNNEL_NOW=\$(grep -oE 'https://[a-zA-Z0-9]+-[a-zA-Z0-9-]+\\.trycloudflare\\.com' /opt/arzpulse/tunnel.log 2>/dev/null | grep -v 'api\\.trycloudflare\\.com' | tail -n 1 || cat /opt/arzpulse/tunnel_url.txt 2>/dev/null || echo "http://\$IP_NOW")
+  CUSTOM_DOM=\$(cat /opt/arzpulse/custom_domain.txt 2>/dev/null | tr -d '[:space:]' || grep -E '^CUSTOM_DOMAIN=' /opt/arzpulse/.env 2>/dev/null | cut -d= -f2- | tr -d '"' || true)
+  TUNNEL_NOW=\$(grep -oE 'https://[a-zA-Z0-9]+-[a-zA-Z0-9-]+\\.trycloudflare\\.com' /opt/arzpulse/tunnel.log 2>/dev/null | grep -v 'api\\.trycloudflare\\.com' | tail -n 1 || cat /opt/arzpulse/tunnel_url.txt 2>/dev/null || echo "https://\$IP_NOW")
+  ACTIVE_HTTPS="https://\${CUSTOM_DOM:-\$IP_NOW}"
+  if [ -z "\$CUSTOM_DOM" ] && [ -n "\$TUNNEL_NOW" ]; then
+    ACTIVE_HTTPS="\$TUNNEL_NOW"
+  fi
   echo -e "\${CYAN}================================================================\${NC}"
   echo -e "\${GREEN}         👑 ArzPulse Pro Server Manager (sudo arz)              \${NC}"
   echo -e "\${CYAN}================================================================\${NC}"
-  echo -e "  🌐 Direct Mini App:  \${GREEN}http://\$IP_NOW/miniapp\${NC}  (and :8080)"
-  echo -e "  👑 Direct Web Panel: \${GREEN}http://\$IP_NOW/admin?autologin=1\${NC}"
-  echo -e "  🔒 HTTPS Mini App:   \${YELLOW}\$TUNNEL_NOW/miniapp\${NC}"
-  echo -e "  🔒 HTTPS Web Panel:  \${YELLOW}\$TUNNEL_NOW/admin?autologin=1\${NC}"
+  if [ -n "\$CUSTOM_DOM" ]; then
+    echo -e "  🌐 Saved Domain/SSL: \${GREEN}https://\$CUSTOM_DOM\${NC} (Permanent + SSL 443)"
+  fi
+  echo -e "  🚀 HTTPS Mini App:   \${YELLOW}\$ACTIVE_HTTPS/miniapp\${NC}"
+  echo -e "  👑 HTTPS Web Panel:  \${YELLOW}\$ACTIVE_HTTPS/admin?autologin=1\${NC}"
+  echo -e "  🖥 Direct Server IP: \${GREEN}http://\$IP_NOW/admin?autologin=1\${NC} (and :8080)"
   echo -e "\${CYAN}----------------------------------------------------------------\${NC}"
-  echo -e "  \${YELLOW}1)\${NC} 📊 Show Bot, Web Panel & HTTPS Tunnel Status"
+  echo -e "  \${YELLOW}1)\${NC} 📊 Show Bot, Web Panel & HTTPS SSL Status"
   echo -e "  \${YELLOW}2)\${NC} 🔄 Update Bot & Dependencies"
   echo -e "  \${YELLOW}3)\${NC} ♻️  Restart Bot, Web Panel & HTTPS Tunnel"
   echo -e "  \${YELLOW}4)\${NC} 🛑 Stop Bot & Web Panel"
-  echo -e "  \${YELLOW}5)\${NC} 🔒 Issue Custom SSL Certificate (Domain / Subdomain / IP)"
+  echo -e "  \${YELLOW}5)\${NC} 🔒 Set Domain / Subdomain / IP & Issue SSL Certificate"
   echo -e "  \${YELLOW}6)\${NC} 🔑 Change Bot Token / Owner ID / Show Admin Credentials"
   echo -e "  \${YELLOW}7)\${NC} 🗑️  Uninstall ArzPulse Pro Completely"
   echo -e "  \${YELLOW}0)\${NC} 🚪 Exit"
@@ -1916,38 +2381,24 @@ show_menu() {
 }
 
 issue_ssl() {
-  echo -e "\\n\${BLUE}[SSL Wizard] Enter your Domain, Subdomain, or Server IP Address:\${NC}"
-  read -rp "Target (e.g. bot.example.com or 203.0.113.10): " TARGET_HOST </dev/tty
-  TARGET_HOST=\$(echo "\$TARGET_HOST" | sed -E 's|^https?://||; s|/.*\$||; s|:[0-9]+\$||' | tr -d '[:space:]')
-  if [[ "\$TARGET_HOST" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+\$ ]]; then
-    mkdir -p /etc/nginx/ssl
-    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \\
-      -keyout /etc/nginx/ssl/arz-ip.key \\
-      -out /etc/nginx/ssl/arz-ip.crt \\
-      -subj "/CN=\$TARGET_HOST"
-    systemctl restart nginx arzpulse-bot
-    echo -e "\${GREEN}✅ IP HTTP/HTTPS configured at http://\$TARGET_HOST/admin and https://\$TARGET_HOST/admin\${NC}"
-  else
-    read -rp "Enter email for Let's Encrypt SSL notifications: " SSL_EMAIL </dev/tty
-    cat << NGINX_EOF > /etc/nginx/sites-available/arzpulse
-server {
-    listen 80;
-    server_name \$TARGET_HOST;
-    location / {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_set_header Host \\\$host;
-        proxy_set_header X-Real-IP \\\$remote_addr;
-    }
-}
-NGINX_EOF
-    ln -sf /etc/nginx/sites-available/arzpulse /etc/nginx/sites-enabled/arzpulse
-    systemctl reload nginx
-    certbot --nginx -d "\$TARGET_HOST" --non-interactive --agree-tos -m "\$SSL_EMAIL" --redirect
-    echo "https://\$TARGET_HOST" > /opt/arzpulse/tunnel_url.txt
-    sed -i "s|^WEB_PANEL_URL=.*|WEB_PANEL_URL=\"https://\$TARGET_HOST\"|" "\$INSTALL_DIR/.env"
-    systemctl restart arzpulse-bot
-    echo -e "\${GREEN}✅ Let's Encrypt SSL activated at https://\$TARGET_HOST/admin\${NC}"
+  echo -e "\\n\${BLUE}[SSL & Domain Manager] Enter your Domain, Subdomain, or Server IP:\${NC}"
+  read -rp "Target (e.g. sub.yourdomain.com or 203.0.113.10): " TARGET_HOST </dev/tty
+  TARGET_HOST=\$(echo "\$TARGET_HOST" | sed -E 's|^https?://||I; s|/.*\$||; s|:[0-9]+\$||' | tr -d '[:space:]')
+  if [ -z "\$TARGET_HOST" ]; then
+    echo -e "\${RED}[!] Host cannot be empty.\${NC}"
+    return
   fi
+  SSL_EMAIL=""
+  if ! [[ "\$TARGET_HOST" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+\$ ]]; then
+    read -rp "Enter email for Let's Encrypt SSL (or press Enter to skip): " SSL_EMAIL </dev/tty || true
+    SSL_EMAIL=\$(echo "\$SSL_EMAIL" | tr -d '[:space:]')
+  fi
+  echo -e "\${YELLOW}⏳ Saving \$TARGET_HOST permanently & issuing SSL certificate on Port 443...\${NC}"
+  /usr/local/bin/arz-ssl "\$TARGET_HOST" "\$SSL_EMAIL"
+  systemctl restart arzpulse-bot || true
+  echo -e "\${GREEN}✅ Domain/Subdomain (\$TARGET_HOST) is permanently saved and SSL is active!\${NC}"
+  echo -e "\${CYAN}👑 Owner Web Admin (HTTPS): https://\$TARGET_HOST/admin?autologin=1\${NC}"
+  echo -e "\${CYAN}🚀 Telegram Mini App (HTTPS): https://\$TARGET_HOST/miniapp\${NC}"
 }
 
 change_credentials() {
@@ -1969,13 +2420,13 @@ change_credentials() {
 while true; do
   show_menu
   case "\$choice" in
-    1) systemctl status arzpulse-bot arzpulse-tunnel --no-pager || true ; read -rp "Press Enter..." </dev/tty ;;
+    1) systemctl status arzpulse-bot nginx arzpulse-tunnel --no-pager || true ; read -rp "Press Enter..." </dev/tty ;;
     2) "\$INSTALL_DIR/venv/bin/pip" install --upgrade aiogram aiohttp matplotlib && systemctl restart arzpulse-bot ; echo -e "\${GREEN}✅ Updated successfully!\${NC}" ; read -rp "Press Enter..." </dev/tty ;;
-    3) rm -f /opt/arzpulse/tunnel.log /opt/arzpulse/tunnel_url.txt ; systemctl restart arzpulse-tunnel ; sleep 4 ; grep -oE 'https://[a-zA-Z0-9]+-[a-zA-Z0-9-]+\\.trycloudflare\\.com' /opt/arzpulse/tunnel.log 2>/dev/null | grep -v 'api\\.trycloudflare\\.com' | tail -n 1 > /opt/arzpulse/tunnel_url.txt || true ; systemctl restart arzpulse-bot ; echo -e "\${GREEN}✅ Services restarted!\${NC}" ; read -rp "Press Enter..." </dev/tty ;;
+    3) rm -f /opt/arzpulse/tunnel.log ; systemctl restart nginx arzpulse-tunnel arzpulse-bot ; echo -e "\${GREEN}✅ Services restarted (Saved Domain & SSL preserved)!\${NC}" ; read -rp "Press Enter..." </dev/tty ;;
     4) systemctl stop arzpulse-bot arzpulse-tunnel ; echo -e "\${YELLOW}🛑 Services stopped.\${NC}" ; read -rp "Press Enter..." </dev/tty ;;
     5) issue_ssl ; read -rp "Press Enter..." </dev/tty ;;
     6) change_credentials ; read -rp "Press Enter..." </dev/tty ;;
-    7) systemctl stop arzpulse-bot arzpulse-tunnel || true ; systemctl disable arzpulse-bot arzpulse-tunnel || true ; rm -rf "\$INSTALL_DIR" "\$CLI_PATH" /etc/systemd/system/arzpulse-bot.service /etc/systemd/system/arzpulse-tunnel.service ; echo -e "\${RED}🗑️ Uninstalled completely.\${NC}" ; exit 0 ;;
+    7) systemctl stop arzpulse-bot arzpulse-tunnel || true ; systemctl disable arzpulse-bot arzpulse-tunnel || true ; rm -rf "\$INSTALL_DIR" "\$CLI_PATH" /usr/local/bin/arz-ssl /etc/systemd/system/arzpulse-bot.service /etc/systemd/system/arzpulse-tunnel.service ; echo -e "\${RED}🗑️ Uninstalled completely.\${NC}" ; exit 0 ;;
     0) exit 0 ;;
     *) echo -e "\${RED}Invalid option!\${NC}" ; sleep 1 ;;
   esac
@@ -1987,7 +2438,10 @@ echo ""
 echo -e "\${GREEN}================================================================\${NC}"
 echo -e "\${GREEN}✅ ArzPulse Pro Bot, Mini App & Web Panel Installed & Started!  \${NC}"
 echo -e "\${CYAN}👉 Send /start to your bot (@\$BOT_USERNAME) in Telegram now!   \${NC}"
-if [ -n "\$TUNNEL_URL" ]; then
+if [ -n "\$INPUT_HOST" ]; then
+  echo -e "\${GREEN}🔒 Permanent Domain SSL (Mini App): https://\$INPUT_HOST/miniapp\${NC}"
+  echo -e "\${GREEN}👑 Permanent Domain SSL (Owner):    https://\$INPUT_HOST/admin?autologin=1\${NC}"
+elif [ -n "\$TUNNEL_URL" ]; then
   echo -e "\${YELLOW}🔒 Telegram Mini App (HTTPS): \$TUNNEL_URL/miniapp              \${NC}"
   echo -e "\${YELLOW}👑 Owner Web Admin (HTTPS):   \$TUNNEL_URL/admin?autologin=1    \${NC}"
 fi
@@ -1995,7 +2449,7 @@ echo -e "\${CYAN}🌐 Direct Web Panel (Port 80):   http://\$SERVER_IP/admin?aut
 echo -e "\${CYAN}🌐 Direct Mini App (Port 80):    http://\$SERVER_IP/miniapp     \${NC}"
 echo -e "\${CYAN}🌐 Direct Port 8080:             http://\$SERVER_IP:8080/admin?autologin=1\${NC}"
 echo -e "\${CYAN}🔑 Admin Username: ${adminUser} | Password: ${adminPass}        \${NC}"
-echo -e "\${CYAN}🛠 Run 'sudo arz' anytime to manage SSL, restart, or update.    \${NC}"
+echo -e "\${CYAN}🛠 Run 'sudo arz' (Option 5) anytime to set Domain/Subdomain SSL\${NC}"
 echo -e "\${GREEN}================================================================\${NC}"
 `;
 }

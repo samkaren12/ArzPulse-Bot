@@ -95,6 +95,7 @@ export const BotSimulatorView: React.FC<BotSimulatorViewProps> = ({
 }) => {
   const t = TRANSLATIONS[lang];
   const [chatMode, setChatMode] = useState<'private' | 'group'>('private');
+  const [isOwnerRole, setIsOwnerRole] = useState<boolean>(true);
   const [fsmState, setFsmState] = useState<BotFSMState>('idle');
   const [convFrom, setConvFrom] = useState<string>('USD');
   const [convTo, setConvTo] = useState<string>('TRX');
@@ -959,9 +960,21 @@ export const BotSimulatorView: React.FC<BotSimulatorViewProps> = ({
 
         {/* Colored ReplyKeyboardMarkup (NOT Inline Buttons — Authentic Bottom Keyboard!) */}
         <div className="p-3 bg-slate-950 border-t border-slate-800/90 space-y-2">
-          <div className="flex items-center justify-between text-[11px] text-slate-400 px-1">
-            <span>ReplyKeyboardMarkup (aiogram 3.x Colored Keyboard Buttons)</span>
-            <span className="font-mono text-slate-500">success · primary · danger</span>
+          <div className="flex items-center justify-between text-[11px] text-slate-400 px-1 flex-wrap gap-2">
+            <span>
+              ReplyKeyboardMarkup ({isOwnerRole ? '👑 نمای مالک ربات - دکمه مدیریت فعال' : '👤 نمای کاربر عادی - بدون دکمه مدیریت مالک'})
+            </span>
+            <button
+              type="button"
+              onClick={() => setIsOwnerRole((prev) => !prev)}
+              className={`px-2 py-0.5 rounded-md font-semibold text-[11px] transition-colors border ${
+                isOwnerRole
+                  ? 'bg-rose-600/20 border-rose-500/40 text-rose-300 hover:bg-rose-600/30'
+                  : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'
+              }`}
+            >
+              {isOwnerRole ? 'تغییر به نمای کاربر عادی 👤' : 'تغییر به نمای مالک ربات 👑'}
+            </button>
           </div>
 
           {fsmState === 'choosing_lang' ? (
@@ -1050,14 +1063,16 @@ export const BotSimulatorView: React.FC<BotSimulatorViewProps> = ({
                 {t.btnAddToGroup}
               </button>
 
-              {/* Row 5: Owner Admin Panel (danger - spans 2 columns) */}
-              <button
-                type="button"
-                onClick={() => handleKeyboardButtonClick('owner', t.btnOwnerPanel)}
-                className="col-span-2 bg-rose-600 hover:bg-rose-500 border border-rose-500/80 text-white font-semibold py-2.5 px-3 rounded-xl text-xs transition-all shadow-sm whitespace-nowrap truncate"
-              >
-                {t.btnOwnerPanel}
-              </button>
+              {/* Row 5: Owner Admin Panel (ONLY visible to Owner in private chat, hidden for regular users) */}
+              {isOwnerRole && chatMode === 'private' && (
+                <button
+                  type="button"
+                  onClick={() => handleKeyboardButtonClick('owner', t.btnOwnerPanel)}
+                  className="col-span-2 bg-rose-600 hover:bg-rose-500 border border-rose-500/80 text-white font-semibold py-2.5 px-3 rounded-xl text-xs transition-all shadow-sm whitespace-nowrap truncate"
+                >
+                  {t.btnOwnerPanel} (فقط مخصوص مالک ربات)
+                </button>
+              )}
             </div>
           )}
         </div>
