@@ -16,14 +16,15 @@ import {
   generateMultilangReadme,
   generateOneLineCurlCommands,
   generateDirectZero404ServerCommand,
+  LIVE_INSTALL_SCRIPT_URL,
 } from './codeGenerators.ts';
 
 test('generateOneLineCurlCommands and generateDirectZero404ServerCommand include Bot Token, Owner ID prompts, and ArzDigital engine', () => {
   const cmds = generateOneLineCurlCommands('samkaren', 'ArzPulse-Bot');
-  assert.equal(cmds.directCurlSubshell, 'bash <(curl -Ls https://paste.rs/ivNg2)');
+  assert.equal(cmds.directCurlSubshell, `bash <(curl -Ls ${LIVE_INSTALL_SCRIPT_URL})`);
   assert.equal(
     cmds.bashSubshell,
-    'bash <(curl -fsSL https://raw.githubusercontent.com/samkaren/ArzPulse-Bot/main/install.sh 2>/dev/null || curl -fsSL https://paste.rs/ivNg2)'
+    `bash <(curl -fsSL https://raw.githubusercontent.com/samkaren/ArzPulse-Bot/main/install.sh 2>/dev/null || curl -fsSL ${LIVE_INSTALL_SCRIPT_URL})`
   );
   const zero404 = generateDirectZero404ServerCommand();
   assert.ok(zero404.includes('Enter your Telegram Bot API Token'));

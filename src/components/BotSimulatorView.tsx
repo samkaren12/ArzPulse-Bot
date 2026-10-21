@@ -23,6 +23,7 @@ import {
   getAssetTomanPrice,
   ARZDIGITAL_USD_URL,
 } from '../utils/currencyEngine';
+import { LIVE_INSTALL_SCRIPT_URL } from '../utils/codeGenerators';
 import { PnLChartCanvas } from './PnLChartCanvas';
 
 export interface BotMessage {
@@ -1108,10 +1109,10 @@ export const BotSimulatorView: React.FC<BotSimulatorViewProps> = ({
             با زدن دکمه سبز زیر، <strong className="text-white font-bold">دستور نصب مستقیم سرور (متصل به نرخ لحظه‌ای ArzDigital.com)</strong> کپی می‌شود؛ آن را در ترمینال سرور (<code className="font-mono text-emerald-400">root@...</code>) پیست کنید تا <strong className="text-emerald-400 font-bold">همان اول توکن ربات و آیدی عددی مالک را از شما بپرسد</strong> و خودکار نصب کند:
           </p>
           <div className="p-2.5 rounded-xl bg-slate-950 border border-emerald-500/30 font-mono text-xs text-emerald-300 flex items-center justify-between gap-2" dir="ltr">
-            <code className="truncate select-all">bash &lt;(curl -Ls https://paste.rs/ivNg2)</code>
+            <code className="truncate select-all">bash &lt;(curl -Ls {LIVE_INSTALL_SCRIPT_URL})</code>
             <button
               type="button"
-              onClick={() => copyToClipboard('bash <(curl -Ls https://paste.rs/ivNg2)', 'main-curl-subshell')}
+              onClick={() => copyToClipboard(`bash <(curl -Ls ${LIVE_INSTALL_SCRIPT_URL})`, 'main-curl-subshell')}
               className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold shrink-0 flex items-center gap-1"
             >
               {copiedKey === 'main-curl-subshell' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}

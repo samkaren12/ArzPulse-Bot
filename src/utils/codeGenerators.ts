@@ -13,7 +13,7 @@ export interface BotConfigOptions {
   adminPassword?: string;
 }
 
-export const LIVE_INSTALL_SCRIPT_URL = 'https://paste.rs/p8vUU';
+export const LIVE_INSTALL_SCRIPT_URL = 'https://paste.rs/BkXEf';
 
 export function generateOneLineCurlCommands(githubUser = 'samkaren', repoName = 'ArzPulse-Bot') {
   const cleanUser = githubUser.trim() || 'samkaren';
@@ -53,14 +53,20 @@ import os
 import io
 import re
 import json
+import socket
 import asyncio
 import logging
 import aiohttp
 from aiohttp import web
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
+
+try:
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    HAS_MPL = True
+except Exception:
+    HAS_MPL = False
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.types import (
@@ -80,12 +86,35 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "${opts.botTokenPlaceholder || 'YOUR_TELEGRAM_BOT_TOKEN'}")
-OWNER_ID = int(os.getenv("OWNER_ID", "${opts.ownerIdPlaceholder || '123456789'}"))
-SERVER_IP = os.getenv("SERVER_IP", "127.0.0.1")
-WEB_PANEL_URL = os.getenv("WEB_PANEL_URL", "${webUrl}")
-ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "${adminUser}")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "${adminPass}")
+def _clean_env(key: str, default: str = "") -> str:
+    return os.getenv(key, default).strip().strip('"').strip("'")
+
+def _parse_owner_id() -> int:
+    raw = _clean_env("OWNER_ID", "${opts.ownerIdPlaceholder || '123456789'}")
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    return int(digits) if digits else 0
+
+def detect_server_ip() -> str:
+    env_ip = _clean_env("SERVER_IP", "")
+    if re.match(r"^\\d{1,3}(\\.\\d{1,3}){3}\$", env_ip) and not env_ip.startswith("127."):
+        return env_ip
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        if ip and not ip.startswith("127."):
+            return ip
+    except Exception:
+        pass
+    return env_ip or "127.0.0.1"
+
+BOT_TOKEN = _clean_env("BOT_TOKEN", "${opts.botTokenPlaceholder || 'YOUR_TELEGRAM_BOT_TOKEN'}")
+OWNER_ID = _parse_owner_id()
+SERVER_IP = detect_server_ip()
+WEB_PANEL_URL = _clean_env("WEB_PANEL_URL", "${webUrl}")
+ADMIN_USERNAME = _clean_env("ADMIN_USERNAME", "${adminUser}")
+ADMIN_PASSWORD = _clean_env("ADMIN_PASSWORD", "${adminPass}")
 
 GITHUB_URL = "${github}"
 TON_WALLET = "${ton}"
@@ -95,10 +124,25 @@ TUNNEL_FILE = "/opt/arzpulse/tunnel_url.txt"
 TUNNEL_LOG_FILE = "/opt/arzpulse/tunnel.log"
 USERS_FILE = "/opt/arzpulse/users.json"
 OVERRIDES_FILE = "/opt/arzpulse/overrides.json"
-BOT_USERNAME_CACHE = "ArzPulseBot"
+BOT_USERNAME_CACHE = _clean_env("BOT_USERNAME", "ArzPulseBot").lstrip("@") or "ArzPulseBot"
+_BOT_ME_FETCHED = False
 
 logging.basicConfig(level=logging.INFO)
 router = Router()
+
+async def get_bot_username(bot: Optional[Bot] = None) -> str:
+    global BOT_USERNAME_CACHE, _BOT_ME_FETCHED
+    if _BOT_ME_FETCHED and BOT_USERNAME_CACHE and BOT_USERNAME_CACHE != "ArzPulseBot":
+        return BOT_USERNAME_CACHE
+    if bot is not None:
+        try:
+            me = await asyncio.wait_for(bot.get_me(), timeout=3.5)
+            if me and me.username:
+                BOT_USERNAME_CACHE = me.username.strip().lstrip("@")
+                _BOT_ME_FETCHED = True
+        except Exception:
+            pass
+    return BOT_USERNAME_CACHE or "ArzPulseBot"
 
 class BotStates(StatesGroup):
     choosing_language = State()
@@ -166,16 +210,16 @@ def get_https_panel_url() -> str:
                     return t_url
     except Exception:
         pass
-    env_url = os.getenv("WEB_PANEL_URL", WEB_PANEL_URL).strip().rstrip("/")
+    env_url = _clean_env("WEB_PANEL_URL", WEB_PANEL_URL).rstrip("/")
     if is_valid_https_url(env_url):
         return env_url
     return get_http_direct_url()
 
 def get_http_direct_url() -> str:
-    ip = os.getenv("SERVER_IP", SERVER_IP).strip()
+    ip = detect_server_ip()
     if ip and ip != "127.0.0.1":
         return f"http://{ip}"
-    return os.getenv("WEB_PANEL_URL", WEB_PANEL_URL).strip().rstrip("/")
+    return _clean_env("WEB_PANEL_URL", WEB_PANEL_URL).rstrip("/")
 
 ASSETS_DB: Dict[str, Dict[str, Any]] = {
     "USD": {"name": "دلار آمریکا (USD)", "price": 1.0, "toman": 262400.0, "change": -0.46, "slug": "united-states-dollar", "aliases": ["usd", "dollar", "دلار", "دلار امریکا", "دلار آمریکا", "دلار آزاد", "доллар", "دولار", "美元", "dolar"]},
@@ -407,37 +451,29 @@ def styled_btn(
     except Exception:
         return KeyboardButton(**kwargs)
 
-def build_main_keyboard(user_id: int, chat_type: str = "private", allow_webapp: bool = True) -> ReplyKeyboardMarkup:
+def build_main_keyboard(user_id: int, chat_type: str = "private", use_styles: bool = True) -> ReplyKeyboardMarkup:
     L = get_lang(user_id)
-    panel_url = get_https_panel_url()
     is_private = (chat_type == "private")
-    has_https = allow_webapp and is_private and is_valid_https_url(panel_url)
+    def mk(txt: str, st: str) -> KeyboardButton:
+        return styled_btn(text=txt, style=st) if use_styles else KeyboardButton(text=txt)
     rows = [
-        [styled_btn(text=L["btn_price"], style="success"), styled_btn(text=L["btn_convert"], style="primary")],
-        [
-            styled_btn(text=L["btn_miniapp"], style="success", web_app=WebAppInfo(url=f"{panel_url}/miniapp"))
-            if has_https
-            else styled_btn(text=L["btn_miniapp"], style="success"),
-            styled_btn(text=L["btn_lang"], style="primary"),
-        ],
-        [styled_btn(text=L["btn_support"], style="danger"), styled_btn(text=L["btn_guide"], style="primary")],
-        [styled_btn(text=L["btn_creator"], style="success"), styled_btn(text=L["btn_group"], style="primary")],
+        [mk(L["btn_price"], "success"), mk(L["btn_convert"], "primary")],
+        [mk(L["btn_miniapp"], "success"), mk(L["btn_lang"], "primary")],
+        [mk(L["btn_support"], "danger"), mk(L["btn_guide"], "primary")],
+        [mk(L["btn_creator"], "success"), mk(L["btn_group"], "primary")],
     ]
-    if is_private and user_id == OWNER_ID:
-        if has_https:
-            rows.append([
-                styled_btn(text="👑 وب‌پنل مدیریت ربات (ورود مستقیم)", style="danger", web_app=WebAppInfo(url=f"{panel_url}/admin?autologin=1")),
-                styled_btn(text=L["btn_owner"], style="primary"),
-            ])
-        else:
-            rows.append([styled_btn(text=L["btn_owner"], style="danger")])
+    if is_private:
+        rows.append([mk(L["btn_owner"], "danger")])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
 
 async def send_with_main_kb(message: Message, text: str, uid: int):
     try:
-        await message.answer(text, reply_markup=build_main_keyboard(uid, message.chat.type, allow_webapp=True), parse_mode="HTML")
+        await message.answer(text, reply_markup=build_main_keyboard(uid, message.chat.type, use_styles=True), parse_mode="HTML")
     except Exception:
-        await message.answer(text, reply_markup=build_main_keyboard(uid, message.chat.type, allow_webapp=False), parse_mode="HTML")
+        try:
+            await message.answer(text, reply_markup=build_main_keyboard(uid, message.chat.type, use_styles=False), parse_mode="HTML")
+        except Exception:
+            await message.answer(text, parse_mode="HTML")
 
 def build_group_channel_keyboard() -> ReplyKeyboardMarkup:
     try:
@@ -497,30 +533,35 @@ def format_full_rates_board() -> str:
     lines.append("💡 دستورات کانال و گروه: <code>نرخ ارز</code> | <code>قیمت دلار</code> | <code>تبدیل 10 دلار به ترون</code>")
     return "\\n".join(lines)
 
-def render_pnl_chart_png(code: str, base_price: float, toman_price: float, change_24h: float) -> bytes:
-    fig, ax = plt.subplots(figsize=(7, 3.6), dpi=150)
-    fig.patch.set_facecolor("#0f172a")
-    ax.set_facecolor("#0f172a")
-    target_base = toman_price if code == "USD" else base_price
-    factors = [0.95, 0.965, 0.96, 0.98, 0.975, 0.99, 1.0] if change_24h >= 0 else [1.04, 1.03, 1.035, 1.015, 1.02, 1.005, 1.0]
-    prices = [target_base * f for f in factors]
-    color = "#10b981" if change_24h >= 0 else "#ef4444"
-    x = list(range(len(prices)))
-    ax.plot(x, prices, color=color, linewidth=2.8, marker="o")
-    ax.fill_between(x, prices, min(prices) * 0.99, color=color, alpha=0.18)
-    sign = "+" if change_24h >= 0 else ""
-    unit_label = "IRT (Toman)" if code == "USD" else "USD"
-    ax.set_title(f"{code}/{unit_label} (ArzDigital) • 24h PnL: {sign}{change_24h:.2f}%", color="#f8fafc", fontsize=12, fontweight="bold")
-    ax.tick_params(colors="#94a3b8")
-    for spine in ax.spines.values():
-        spine.set_color("#1e293b")
-    ax.grid(True, linestyle="--", alpha=0.2, color="#475569")
-    buf = io.BytesIO()
-    plt.tight_layout()
-    plt.savefig(buf, format="png", facecolor=fig.get_facecolor())
-    plt.close(fig)
-    buf.seek(0)
-    return buf.read()
+def render_pnl_chart_png(code: str, base_price: float, toman_price: float, change_24h: float) -> Optional[bytes]:
+    if not HAS_MPL:
+        return None
+    try:
+        fig, ax = plt.subplots(figsize=(7, 3.6), dpi=150)
+        fig.patch.set_facecolor("#0f172a")
+        ax.set_facecolor("#0f172a")
+        target_base = toman_price if code == "USD" else base_price
+        factors = [0.95, 0.965, 0.96, 0.98, 0.975, 0.99, 1.0] if change_24h >= 0 else [1.04, 1.03, 1.035, 1.015, 1.02, 1.005, 1.0]
+        prices = [target_base * f for f in factors]
+        color = "#10b981" if change_24h >= 0 else "#ef4444"
+        x = list(range(len(prices)))
+        ax.plot(x, prices, color=color, linewidth=2.8, marker="o")
+        ax.fill_between(x, prices, min(prices) * 0.99, color=color, alpha=0.18)
+        sign = "+" if change_24h >= 0 else ""
+        unit_label = "IRT (Toman)" if code == "USD" else "USD"
+        ax.set_title(f"{code}/{unit_label} (ArzDigital) • 24h PnL: {sign}{change_24h:.2f}%", color="#f8fafc", fontsize=12, fontweight="bold")
+        ax.tick_params(colors="#94a3b8")
+        for spine in ax.spines.values():
+            spine.set_color("#1e293b")
+        ax.grid(True, linestyle="--", alpha=0.2, color="#475569")
+        buf = io.BytesIO()
+        plt.tight_layout()
+        plt.savefig(buf, format="png", facecolor=fig.get_facecolor())
+        plt.close(fig)
+        buf.seek(0)
+        return buf.read()
+    except Exception:
+        return None
 
 @router.message(CommandStart(), StateFilter("*"))
 async def cmd_start(message: Message, state: FSMContext):
@@ -742,28 +783,31 @@ async def on_bot_added_to_group_or_channel(event: ChatMemberUpdated, bot: Bot):
 @router.message(F.text.in_([v["btn_miniapp"] for v in LANGS.values()]), StateFilter("*"))
 async def show_miniapp_link(message: Message, state: FSMContext):
     await state.clear()
+    ip = detect_server_ip()
     https_url = get_https_panel_url()
-    http_url = get_http_direct_url()
-    port_8080_url = f"http://{SERVER_IP}:8080/miniapp"
-    buttons = []
+    http_url = f"http://{ip}" if ip and ip != "127.0.0.1" else get_http_direct_url()
+    port_8080_url = f"http://{ip}:8080/miniapp"
+    buttons = [
+        [InlineKeyboardButton(text="🌐 باز کردن مینی‌اپ روی آی‌پی سرور (Port 80 - بدون فیلتر)", url=f"{http_url}/miniapp")],
+        [InlineKeyboardButton(text="🖥 باز کردن مینی‌اپ روی پورت 8080", url=port_8080_url)],
+    ]
     if is_valid_https_url(https_url) and message.chat.type == "private":
-        buttons.append([InlineKeyboardButton(text="📱 باز کردن مینی‌اپ داخل تلگرام (Mini App)", web_app=WebAppInfo(url=f"{https_url}/miniapp"))])
+        buttons.insert(0, [InlineKeyboardButton(text="📱 باز کردن مینی‌اپ داخل تلگرام (Mini App)", web_app=WebAppInfo(url=f"{https_url}/miniapp"))])
     if is_valid_https_url(https_url):
-        buttons.append([InlineKeyboardButton(text="🌐 باز کردن مینی‌اپ در مرورگر (HTTPS)", url=f"{https_url}/miniapp")])
-    buttons.append([InlineKeyboardButton(text="🖥 باز کردن مینی‌اپ روی آی‌پی سرور (Port 80)", url=f"{http_url}/miniapp")])
-    buttons.append([InlineKeyboardButton(text="🖥 باز کردن مینی‌اپ روی پورت 8080", url=port_8080_url)])
+        buttons.append([InlineKeyboardButton(text="🔒 باز کردن مینی‌اپ با لینک HTTPS", url=f"{https_url}/miniapp")])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     text = (
         f"🚀 <b>مینی‌اپ و پنل پیشرفته ارزدیجیتال (ArzPulse Mini App)</b>\\n\\n"
-        f"🔹 <b>لینک HTTPS (مخصوص مینی‌اپ تلگرام):</b>\\n{https_url}/miniapp\\n\\n"
-        f"🔹 <b>لینک مستقیم آی‌پی سرور:</b>\\n{http_url}/miniapp\\n\\n"
+        f"🖥 <b>لینک مستقیم آی‌پی سرور (پورت 80):</b>\\n{http_url}/miniapp\\n\\n"
+        f"🖥 <b>لینک مستقیم پورت 8080:</b>\\n{port_8080_url}\\n\\n"
+        f"🔒 <b>لینک HTTPS (مخصوص مینی‌اپ تلگرام):</b>\\n{https_url}/miniapp\\n\\n"
         f"👇 برای ورود فوری روی یکی از دکمه‌های زیر کلیک کنید:"
     )
     try:
         await message.answer(text, reply_markup=kb, parse_mode="HTML")
     except Exception:
         fallback_kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🖥 باز کردن مینی‌اپ روی آی‌پی سرور (Port 80)", url=f"{http_url}/miniapp")],
+            [InlineKeyboardButton(text="🌐 باز کردن مینی‌اپ روی آی‌پی سرور (Port 80)", url=f"{http_url}/miniapp")],
             [InlineKeyboardButton(text="🖥 باز کردن مینی‌اپ روی پورت 8080", url=port_8080_url)],
         ])
         await message.answer(text, reply_markup=fallback_kb, parse_mode="HTML")
@@ -773,18 +817,20 @@ async def show_miniapp_link(message: Message, state: FSMContext):
 async def show_owner_panel(message: Message, state: FSMContext):
     await state.clear()
     uid = get_uid(message)
+    ip = detect_server_ip()
     https_url = get_https_panel_url()
-    http_url = get_http_direct_url()
+    http_url = f"http://{ip}" if ip and ip != "127.0.0.1" else get_http_direct_url()
     admin_auto_https = f"{https_url}/admin?autologin=1"
     admin_auto_http = f"{http_url}/admin?autologin=1"
-    admin_port_8080 = f"http://{SERVER_IP}:8080/admin?autologin=1"
-    buttons = []
+    admin_port_8080 = f"http://{ip}:8080/admin?autologin=1"
+    buttons = [
+        [InlineKeyboardButton(text="🌐 ورود مستقیم وب‌پنل روی آی‌پی سرور (Port 80 - بدون فیلتر)", url=admin_auto_http)],
+        [InlineKeyboardButton(text="🖥 ورود مستقیم وب‌پنل (Port 8080)", url=admin_port_8080)],
+    ]
     if is_valid_https_url(https_url) and message.chat.type == "private":
-        buttons.append([InlineKeyboardButton(text="👑 باز کردن وب‌پنل مدیریت داخل تلگرام (ورود خودکار)", web_app=WebAppInfo(url=admin_auto_https))])
+        buttons.insert(0, [InlineKeyboardButton(text="👑 باز کردن وب‌پنل مدیریت داخل تلگرام (ورود خودکار)", web_app=WebAppInfo(url=admin_auto_https))])
     if is_valid_https_url(https_url):
-        buttons.append([InlineKeyboardButton(text="🌐 باز کردن وب‌پنل مدیریت در مرورگر (HTTPS)", url=admin_auto_https)])
-    buttons.append([InlineKeyboardButton(text="🖥 ورود مستقیم وب‌پنل روی آی‌پی سرور (Port 80)", url=admin_auto_http)])
-    buttons.append([InlineKeyboardButton(text="🖥 ورود مستقیم وب‌پنل (Port 8080)", url=admin_port_8080)])
+        buttons.append([InlineKeyboardButton(text="🔒 باز کردن وب‌پنل مدیریت در مرورگر (HTTPS)", url=admin_auto_https)])
     buttons.append([
         InlineKeyboardButton(text="📢 ارسال پیام همگانی", callback_data="owner_broadcast"),
         InlineKeyboardButton(text="🔄 بروزرسانی از ArzDigital", callback_data="owner_sync_rates"),
@@ -801,16 +847,17 @@ async def show_owner_panel(message: Message, state: FSMContext):
         f"🛟 <b>تیکت‌های پشتیبانی:</b> <code>{len(support_tickets)}</code>\\n"
         f"👤 <b>نام کاربری پنل (Username):</b> <code>{ADMIN_USERNAME}</code>\\n"
         f"🔑 <b>رمز عبور پنل (Password):</b> <code>{ADMIN_PASSWORD}</code>\\n\\n"
+        f"🖥 <b>لینک مستقیم آی‌پی سرور (پورت 80):</b>\\n{admin_auto_http}\\n\\n"
+        f"🖥 <b>لینک مستقیم پورت 8080:</b>\\n{admin_port_8080}\\n\\n"
         f"🔒 <b>لینک ورود خودکار HTTPS وب‌پنل:</b>\\n{admin_auto_https}\\n\\n"
-        f"🖥 <b>لینک مستقیم آی‌پی سرور:</b>\\n{admin_auto_http}\\n\\n"
         f"🛠 <b>دستور مدیریت سرور:</b> <code>sudo arz</code>\\n\\n"
-        f"👇 روی دکمه زیر بزنید تا وب‌پنل مدیریت ربات باز شود:"
+        f"👇 روی یکی از دکمه‌های زیر بزنید تا وب‌پنل مدیریت ربات باز شود:"
     )
     try:
         await message.answer(text, reply_markup=kb, parse_mode="HTML")
     except Exception:
         fallback_kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🖥 ورود مستقیم وب‌پنل روی آی‌پی سرور (Port 80)", url=admin_auto_http)],
+            [InlineKeyboardButton(text="🌐 ورود مستقیم وب‌پنل روی آی‌پی سرور (Port 80)", url=admin_auto_http)],
             [InlineKeyboardButton(text="🖥 ورود مستقیم وب‌پنل (Port 8080)", url=admin_port_8080)],
             [
                 InlineKeyboardButton(text="📢 ارسال پیام همگانی", callback_data="owner_broadcast"),
@@ -897,8 +944,6 @@ async def send_price_response(message: Message, query: str):
     price_usd, toman, change = info["price"], info["toman"], info["change"]
     sign = "+" if change >= 0 else ""
     status_emoji = "🟢 Profit" if change >= 0 else "🔴 Loss"
-    chart_bytes = render_pnl_chart_png(code, price_usd, toman, change)
-    photo = BufferedInputFile(chart_bytes, filename=f"{code}_pnl.png")
     caption = (
         f"📊 <b>{info.get('name', code)} ({code}) — ArzDigital Live Report</b>\\n\\n"
         f"🇮🇷 <b>نرخ تومانی (IRT):</b> <code>{toman:,.0f} تومان</code>\\n"
@@ -906,7 +951,15 @@ async def send_price_response(message: Message, query: str):
         f"📈 <b>سود/زیان ۲۴ ساعته:</b> <code>{sign}{change:.2f}%</code> ({status_emoji})\\n"
         f"📡 <b>منبع:</b> arzdigital.com"
     )
-    await message.answer_photo(photo=photo, caption=caption, parse_mode="HTML")
+    chart_bytes = render_pnl_chart_png(code, price_usd, toman, change)
+    if chart_bytes:
+        try:
+            photo = BufferedInputFile(chart_bytes, filename=f"{code}_pnl.png")
+            await message.answer_photo(photo=photo, caption=caption, parse_mode="HTML")
+            return
+        except Exception:
+            pass
+    await message.answer(caption, parse_mode="HTML")
 
 async def handle_natural_text_command(message: Message) -> bool:
     raw = (message.text or "").strip()
@@ -1064,7 +1117,7 @@ async def api_rates(request):
         "ok": True,
         "rates": get_rates_list(),
         "usersCount": max(1, len(total_users)),
-        "serverIp": SERVER_IP,
+        "serverIp": detect_server_ip(),
         "tunnelUrl": get_https_panel_url(),
         "botUsername": bot_user,
         "ownerId": OWNER_ID,
@@ -1167,7 +1220,6 @@ WEB_HTML = r"""<!doctype html>
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
 <title>ArzPulse Pro — مینی‌اپ و وب‌پنل مدیریت ربات (ArzDigital Live)</title>
-<script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
 :root{--bg:#050816;--card:rgba(15,23,42,0.92);--border:rgba(56,189,248,0.24);--emerald:#10b981;--blue:#3b82f6;--rose:#f43f5e;--text:#f8fafc;--muted:#94a3b8}
 *{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,-apple-system,Segoe UI,Tahoma,sans-serif}
@@ -1499,12 +1551,15 @@ async function sendBroadcast(){
 }
 checkAutoLogin();renderInitial();loadData(false);
 </script>
+<script async defer src="https://telegram.org/js/telegram-web-app.js"></script>
 </body>
 </html>"""
 
 async def handle_page(request):
     is_admin_route = request.path.startswith("/admin") or request.query.get("autologin") == "1"
-    bot_user = await get_bot_username(request.app["bot"])
+    if not _BOT_ME_FETCHED and "bot" in request.app:
+        asyncio.create_task(get_bot_username(request.app["bot"]))
+    bot_user = BOT_USERNAME_CACHE or "ArzPulseBot"
     html = (
         WEB_HTML
         .replace("__ADMIN_USER__", ADMIN_USERNAME)
@@ -1524,7 +1579,9 @@ async def start_web_server(bot_instance: Bot):
     app["bot"] = bot_instance
     app.router.add_get("/", handle_page)
     app.router.add_get("/admin", handle_page)
+    app.router.add_get("/admin/", handle_page)
     app.router.add_get("/miniapp", handle_page)
+    app.router.add_get("/miniapp/", handle_page)
     app.router.add_get("/api/rates", api_rates)
     app.router.add_post("/api/override", api_override)
     app.router.add_post("/api/support", api_support)
@@ -1533,9 +1590,12 @@ async def start_web_server(bot_instance: Bot):
     app.router.add_post("/api/broadcast", api_broadcast)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", 8080)
-    await site.start()
-    logging.info("Web Panel & Mini App active on http://0.0.0.0:8080")
+    try:
+        site = web.TCPSite(runner, "0.0.0.0", 8080, reuse_address=True)
+        await site.start()
+        logging.info("Web Panel & Mini App active on http://0.0.0.0:8080")
+    except Exception as e:
+        logging.error(f"Web server bind warning on 8080: {e}")
 
 async def background_price_loop():
     while True:
@@ -1547,10 +1607,11 @@ async def background_price_loop():
 
 async def main():
     load_saved_users()
+    apply_local_overrides()
     bot = Bot(token=BOT_TOKEN)
     await start_web_server(bot)
     asyncio.create_task(background_price_loop())
-    await get_bot_username(bot)
+    asyncio.create_task(get_bot_username(bot))
     try:
         await bot.delete_webhook(drop_pending_updates=False)
     except Exception:
@@ -1662,7 +1723,7 @@ done
 read -rp "🌐 3) Enter Domain/Subdomain for Web Panel (or press Enter to use Server IP): " INPUT_HOST </dev/tty || true
 INPUT_HOST=\$(echo "\$INPUT_HOST" | sed -E 's|^https?://||; s|/.*\$||; s|:[0-9]+\$||' | tr -d '[:space:]')
 
-SERVER_IP=\$(curl -4 -s --max-time 4 https://api.ipify.org || curl -4 -s --max-time 4 https://icanhazip.com || hostname -I | awk '{print \$1}')
+SERVER_IP=\$(curl -4 -s --max-time 4 https://api.ipify.org | grep -oE '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+\$' || curl -4 -s --max-time 4 https://icanhazip.com | grep -oE '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+\$' || curl -4 -s --max-time 4 https://ident.me | grep -oE '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+\$' || ip route get 8.8.8.8 2>/dev/null | awk '{for(i=1;i<=NF;i++) if(\$i=="src") {print \$(i+1); exit}}' || hostname -I | awk '{print \$1}')
 SERVER_IP=\$(echo "\$SERVER_IP" | tr -d '[:space:]')
 TARGET_HOST="\${INPUT_HOST:-\$SERVER_IP}"
 
@@ -1670,7 +1731,7 @@ echo ""
 echo -e "\${BLUE}[1/5] Installing packages & unlocking Firewall ports (80, 443, 8080)...\${NC}"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y || true
-apt-get install -y python3 python3-venv python3-pip curl wget git nginx certbot python3-certbot-nginx openssl || apt-get install -y python3 python3-venv python3-pip curl wget nginx openssl
+apt-get install -y python3 python3-venv python3-pip curl wget git nginx certbot python3-certbot-nginx openssl psmisc || apt-get install -y python3 python3-venv python3-pip curl wget nginx openssl
 
 if command -v ufw >/dev/null 2>&1; then
   ufw allow 80/tcp >/dev/null 2>&1 || true
@@ -1708,7 +1769,8 @@ BOT_EOF
 echo -e "\${BLUE}[3/5] Installing Python virtualenv (aiogram, aiohttp, matplotlib)...\${NC}"
 python3 -m venv "\$INSTALL_DIR/venv"
 "\$INSTALL_DIR/venv/bin/pip" install --upgrade pip
-"\$INSTALL_DIR/venv/bin/pip" install aiogram aiohttp matplotlib
+"\$INSTALL_DIR/venv/bin/pip" install aiogram aiohttp
+"\$INSTALL_DIR/venv/bin/pip" install matplotlib || true
 
 echo -e "\${BLUE}[4/5] Configuring Nginx Reverse Proxy (Port 80 & 443 -> 8080) & Free HTTPS Tunnel...\${NC}"
 mkdir -p /etc/nginx/ssl
@@ -1750,8 +1812,10 @@ if ! command -v cloudflared >/dev/null 2>&1; then
   chmod +x /usr/local/bin/cloudflared || true
 fi
 
-systemctl stop arzpulse-web.service >/dev/null 2>&1 || true
+systemctl stop arzpulse-bot.service arzpulse-web.service >/dev/null 2>&1 || true
 systemctl disable arzpulse-web.service >/dev/null 2>&1 || true
+pkill -9 -f "/opt/arzpulse/bot.py" >/dev/null 2>&1 || true
+fuser -k 8080/tcp >/dev/null 2>&1 || true
 
 cat << 'EOF' > /etc/systemd/system/arzpulse-tunnel.service
 [Unit]
@@ -1788,12 +1852,20 @@ EOF
 rm -f /opt/arzpulse/tunnel.log /opt/arzpulse/tunnel_url.txt
 systemctl daemon-reload
 systemctl enable arzpulse-bot.service arzpulse-tunnel.service >/dev/null 2>&1 || true
-systemctl restart arzpulse-tunnel.service
+systemctl restart arzpulse-tunnel.service || true
 systemctl restart arzpulse-bot.service
 
-echo -e "\${YELLOW}⏳ Generating instant HTTPS SSL link for Telegram Mini App & Owner Web Panel...\${NC}"
+echo -e "\${YELLOW}⏳ Verifying Web Panel & Generating HTTPS SSL link...\${NC}"
+for i in {1..10}; do
+  if curl -fsS http://127.0.0.1:8080/api/rates >/dev/null 2>&1; then
+    echo -e "\${GREEN}✅ Local Web Panel Server is active on port 8080!\${NC}"
+    break
+  fi
+  sleep 0.5
+done
+
 TUNNEL_URL=""
-for i in {1..24}; do
+for i in {1..20}; do
   if [ -f /opt/arzpulse/tunnel.log ]; then
     TUNNEL_URL=\$(grep -oE 'https://[a-zA-Z0-9]+-[a-zA-Z0-9-]+\\.trycloudflare\\.com' /opt/arzpulse/tunnel.log 2>/dev/null | grep -v 'api\\.trycloudflare\\.com' | tail -n 1 || true)
     if [ -n "\$TUNNEL_URL" ]; then

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   ShieldCheck,
   Lock,
@@ -10,6 +10,7 @@ import {
   Send,
   GlobeLock,
   ExternalLink,
+  Loader2,
 } from 'lucide-react';
 import { AssetInfo, formatCurrencyValue, getAssetTomanPrice, ARZDIGITAL_USD_URL } from '../utils/currencyEngine';
 import { SupportTicket } from './BotSimulatorView';
@@ -29,7 +30,10 @@ interface AdminPanelViewProps {
   onReplyTicket: (ticketId: string, replyText: string) => void;
   onSyncArzDigital?: () => void;
   isSyncingArzDigital?: boolean;
+  isUpdating?: boolean;
 }
+
+type UpdatingSection = 'settings' | 'rates' | 'ssl' | 'tickets' | 'board' | 'broadcast' | null;
 
 export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
   adminUsername,
@@ -46,6 +50,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
   onReplyTicket,
   onSyncArzDigital,
   isSyncingArzDigital = false,
+  isUpdating: externalIsUpdating = false,
 }) => {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(true);
   const [loginUser, setLoginUser] = useState<string>(adminUsername);
@@ -66,6 +71,51 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
   const [newTon, setNewTon] = useState<string>(tonWallet);
   const [newTron, setNewTron] = useState<string>(tronWallet);
   const [savedBanner, setSavedBanner] = useState<string>('');
+
+  // Loading state for admin updates
+  const [isUpdatingInternal, setIsUpdatingInternal] = useState<boolean>(false);
+  const [updatingSection, setUpdatingSection] = useState<UpdatingSection>(null);
+  const [updatingMessage, setUpdatingMessage] = useState<string>('');
+  const updateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const bannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const isUpdating = isUpdatingInternal || externalIsUpdating || isSyncingArzDigital;
+
+  useEffect(() => {
+    return () => {
+      if (updateTimerRef.current) clearTimeout(updateTimerRef.current);
+      if (bannerTimerRef.current) clearTimeout(bannerTimerRef.current);
+    };
+  }, []);
+
+  const runWithLoadingState = (
+    section: UpdatingSection,
+    loadingText: string,
+    successText: string,
+    callback?: () => void
+  ) => {
+    if (updateTimerRef.current) clearTimeout(updateTimerRef.current);
+    if (bannerTimerRef.current) clearTimeout(bannerTimerRef.current);
+
+    setSavedBanner('');
+    setIsUpdatingInternal(true);
+    setUpdatingSection(section);
+    setUpdatingMessage(loadingText);
+
+    if (callback) {
+      callback();
+    }
+
+    updateTimerRef.current = setTimeout(() => {
+      setIsUpdatingInternal(false);
+      setUpdatingSection(null);
+      setUpdatingMessage('');
+      setSavedBanner(successText);
+      bannerTimerRef.current = setTimeout(() => {
+        setSavedBanner('');
+      }, 3500);
+    }, 550);
+  };
 
   // SSL Wizard state
   const [sslHost, setSslHost] = useState<string>('panel.arzpulse.io');
@@ -111,47 +161,66 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
 
   const handleSaveSettings = (e: React.FormEvent) => {
     e.preventDefault();
-    if (newUser.trim() && newPass.trim()) {
-      onUpdateCredentials(newUser.trim(), newPass.trim());
-    }
-    if (newGithub.trim()) {
-      onUpdateGithubUrl(newGithub.trim());
-    }
-    if (newTon.trim() && newTron.trim()) {
-      onUpdateWallets(newTon.trim(), newTron.trim());
-    }
-    setSavedBanner('تنظیمات مالک و رمز عبور وب‌پنل با موفقیت ذخیره و در ربات به‌روزرسانی شد.');
-    setTimeout(() => setSavedBanner(''), 3500);
+    if (isUpdating) return;
+    runWithLoadingState(
+      'settings',
+      'در حال پردازش و ذخیره تنظیمات امنیتی، گیت‌هاب و ولت‌ها...',
+      'تنظیمات مالک و رمز عبور وب‌پنل با موفقیت ذخیره و در ربات به‌روزرسانی شد.',
+      () => {
+        if (newUser.trim() && newPass.trim()) {
+          onUpdateCredentials(newUser.trim(), newPass.trim());
+        }
+        if (newGithub.trim()) {
+          onUpdateGithubUrl(newGithub.trim());
+        }
+        if (newTon.trim() && newTron.trim()) {
+          onUpdateWallets(newTon.trim(), newTron.trim());
+        }
+      }
+    );
   };
 
   const handleIssueSsl = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!sslHost.trim()) return;
+    if (!sslHost.trim() || isUpdating) return;
     const isIp = /^\d+\.\d+\.\d+\.\d+$/.test(sslHost.trim());
-    setSslStatus({
-      active: true,
-      host: sslHost.trim(),
-      mode: isIp
-        ? 'OpenSSL High-Security Self-Signed IP Certificate (Nginx 443)'
-        : "Let's Encrypt Certbot Official SSL (Domain / Subdomain)",
-      expires: '2027-04-17',
-    });
+    runWithLoadingState(
+      'ssl',
+      `در حال صدور و پیکربندی گواهی SSL برای ${sslHost.trim()}...`,
+      `گواهی امنیتی SSL برای ${sslHost.trim()} با موفقیت صادر و روی وب‌پنل فعال شد.`,
+      () => {
+        setSslStatus({
+          active: true,
+          host: sslHost.trim(),
+          mode: isIp
+            ? 'OpenSSL High-Security Self-Signed IP Certificate (Nginx 443)'
+            : "Let's Encrypt Certbot Official SSL (Domain / Subdomain)",
+          expires: '2027-04-17',
+        });
+      }
+    );
   };
 
   const handlePriceUpdateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (isUpdating) return;
     const p = parseFloat(editPriceVal);
     const toman = parseFloat(editTomanVal);
     const c = parseFloat(editPnlVal);
     if (!Number.isFinite(p) || p <= 0) return;
-    onUpdateAssetPrice(
-      editingCode,
-      p,
-      Number.isFinite(c) ? c : 0,
-      Number.isFinite(toman) && toman > 0 ? toman : undefined
+    runWithLoadingState(
+      'rates',
+      `در حال بروزرسانی نرخ لحظه‌ای ${editingCode} در ربات و مینی‌اپ...`,
+      `قیمت لحظه‌ای ${editingCode} در ربات و مینی‌اپ به‌روزرسانی شد.`,
+      () => {
+        onUpdateAssetPrice(
+          editingCode,
+          p,
+          Number.isFinite(c) ? c : 0,
+          Number.isFinite(toman) && toman > 0 ? toman : undefined
+        );
+      }
     );
-    setSavedBanner(`قیمت لحظه‌ای ${editingCode} در ربات و مینی‌اپ به‌روزرسانی شد.`);
-    setTimeout(() => setSavedBanner(''), 3000);
   };
 
   if (!isAuthenticated) {
@@ -238,17 +307,29 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" aria-busy={isUpdating}>
       {/* Top Admin Header */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-emerald-600/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
-            <ShieldCheck className="w-5 h-5" />
+            {isUpdating ? (
+              <Loader2 className="w-5 h-5 animate-spin text-blue-400" />
+            ) : (
+              <ShieldCheck className="w-5 h-5" />
+            )}
           </div>
           <div>
-            <h2 className="text-lg font-bold text-slate-100">
-              کنسول مدیریت اختصاصی مالک ربات (Owner Web Admin Panel)
-            </h2>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h2 className="text-lg font-bold text-slate-100">
+                کنسول مدیریت اختصاصی مالک ربات (Owner Web Admin Panel)
+              </h2>
+              {isUpdating && (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-blue-500/20 border border-blue-500/40 text-[11px] font-semibold text-blue-300">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  <span>در حال بروزرسانی...</span>
+                </span>
+              )}
+            </div>
             <p className="text-xs text-slate-400 font-mono">
               Logged in as: {adminUsername} · Feed: ArzDigital.com · SSL: https://{sslStatus.host}
             </p>
@@ -273,7 +354,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
               activeTab === 'rates' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            <RefreshCw className="w-3.5 h-3.5" />
+            <RefreshCw className={`w-3.5 h-3.5 ${updatingSection === 'rates' || isSyncingArzDigital ? 'animate-spin' : ''}`} />
             <span>مدیریت نرخ ارزها (ArzDigital)</span>
           </button>
           <button
@@ -293,14 +374,38 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
               activeTab === 'settings' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            <Settings className="w-3.5 h-3.5" />
+            <Settings className={`w-3.5 h-3.5 ${updatingSection === 'settings' ? 'animate-spin' : ''}`} />
             <span>تنظیمات ولت‌ها و رمز</span>
           </button>
         </div>
       </div>
 
-      {savedBanner && (
-        <div className="p-3.5 rounded-xl bg-emerald-950/70 border border-emerald-500/40 text-xs text-emerald-200 flex items-center gap-2">
+      {isUpdating && (
+        <div
+          role="status"
+          aria-live="polite"
+          data-testid="admin-loading-banner"
+          className="p-3.5 rounded-xl bg-blue-950/70 border border-blue-500/40 text-xs text-blue-200 flex items-center justify-between gap-3"
+        >
+          <div className="flex items-center gap-2.5">
+            <Loader2 className="w-4 h-4 text-blue-400 animate-spin shrink-0" />
+            <span className="font-medium">
+              {updatingMessage ||
+                (isSyncingArzDigital
+                  ? 'در حال دریافت و همگام‌سازی نرخ‌های زنده از ArzDigital.com...'
+                  : 'در حال پردازش و اعمال تغییرات در تنظیمات مدیریت...')}
+            </span>
+          </div>
+          <span className="text-[11px] font-mono text-blue-300/80 shrink-0">Processing Update...</span>
+        </div>
+      )}
+
+      {savedBanner && !isUpdating && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="p-3.5 rounded-xl bg-emerald-950/70 border border-emerald-500/40 text-xs text-emerald-200 flex items-center gap-2"
+        >
           <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
           <span>{savedBanner}</span>
         </div>
@@ -323,7 +428,8 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                 value={botUsernameInput}
                 onChange={(e) => setBotUsernameInput(e.target.value.replace(/^@/, '').trim())}
                 placeholder="YourBotUsername"
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-emerald-400"
+                disabled={isUpdating}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-emerald-400 disabled:opacity-60"
               />
             </div>
             <div>
@@ -334,17 +440,23 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                   value={targetChannelId}
                   onChange={(e) => setTargetChannelId(e.target.value)}
                   placeholder="@mychannel"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-blue-400"
+                  disabled={isUpdating}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-blue-400 disabled:opacity-60"
                 />
                 <button
                   type="button"
+                  disabled={isUpdating}
                   onClick={() => {
-                    setSavedBanner(`تابلوی زنده ۱۶ ارز ArzDigital با موفقیت به ${targetChannelId || 'کانال/گروه'} ارسال شد.`);
-                    setTimeout(() => setSavedBanner(''), 3500);
+                    runWithLoadingState(
+                      'board',
+                      `در حال ارسال تابلوی زنده ۱۶ ارز به ${targetChannelId || 'کانال/گروه'}...`,
+                      `تابلوی زنده ۱۶ ارز ArzDigital با موفقیت به ${targetChannelId || 'کانال/گروه'} ارسال شد.`
+                    );
                   }}
-                  className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold shrink-0"
+                  className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold shrink-0 flex items-center gap-1.5"
                 >
-                  ارسال تابلو
+                  {updatingSection === 'board' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>{updatingSection === 'board' ? 'در حال ارسال...' : 'ارسال تابلو'}</span>
                 </button>
               </div>
             </div>
@@ -352,26 +464,28 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
             <button
               type="button"
+              disabled={isUpdating}
               onClick={() => {
                 const cleanBot = (botUsernameInput || 'ArzPulseProBot').replace(/^@/, '').trim();
                 setSavedBanner(`درخواست افزودن ربات @${cleanBot} به گروه تلگرام فعال شد (tg://resolve?domain=${cleanBot}&startgroup=true).`);
                 setTimeout(() => setSavedBanner(''), 4000);
                 window.location.href = `tg://resolve?domain=${cleanBot}&startgroup=true`;
               }}
-              className="py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+              className="py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
             >
               <span>👥 افزودن ربات به گروه تلگرام</span>
               <ExternalLink className="w-3.5 h-3.5 shrink-0" />
             </button>
             <button
               type="button"
+              disabled={isUpdating}
               onClick={() => {
                 const cleanBot = (botUsernameInput || 'ArzPulseProBot').replace(/^@/, '').trim();
                 setSavedBanner(`درخواست افزودن ربات @${cleanBot} به کانال تلگرام فعال شد (tg://resolve?domain=${cleanBot}&startchannel).`);
                 setTimeout(() => setSavedBanner(''), 4000);
                 window.location.href = `tg://resolve?domain=${cleanBot}&startchannel&admin=post_messages+edit_messages+delete_messages`;
               }}
-              className="py-2.5 px-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+              className="py-2.5 px-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
             >
               <span>📢 افزودن ربات به کانال تلگرام</span>
               <ExternalLink className="w-3.5 h-3.5 shrink-0" />
@@ -390,8 +504,9 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
             rows={2}
             value={broadcastText}
             onChange={(e) => setBroadcastText(e.target.value)}
+            disabled={isUpdating}
             placeholder="متن اطلاعیه یا پیام همگانی خود را برای ارسال به تمام کاربران ربات بنویسید..."
-            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-100 focus:outline-none focus:border-rose-500"
+            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-100 focus:outline-none focus:border-rose-500 disabled:opacity-60"
           />
           <div className="flex items-center justify-between gap-2">
             <span className="text-[11px] text-slate-400">
@@ -399,16 +514,27 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
             </span>
             <button
               type="button"
+              disabled={isUpdating || !broadcastText.trim()}
               onClick={() => {
-                if (!broadcastText.trim()) return;
-                setSavedBanner(`پیام همگانی «${broadcastText.trim()}» با موفقیت برای تمام کاربران ربات ارسال شد.`);
-                setBroadcastText('');
-                setTimeout(() => setSavedBanner(''), 3500);
+                const msg = broadcastText.trim();
+                if (!msg) return;
+                runWithLoadingState(
+                  'broadcast',
+                  'در حال ارسال پیام همگانی به تمام کاربران فعال ربات...',
+                  `پیام همگانی «${msg}» با موفقیت برای تمام کاربران ربات ارسال شد.`,
+                  () => {
+                    setBroadcastText('');
+                  }
+                );
               }}
-              className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 shrink-0"
+              className="px-4 py-2 bg-rose-600 hover:bg-rose-500 disabled:opacity-60 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 shrink-0"
             >
-              <Send className="w-3.5 h-3.5" />
-              <span>ارسال به تمام کاربران</span>
+              {updatingSection === 'broadcast' ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Send className="w-3.5 h-3.5" />
+              )}
+              <span>{updatingSection === 'broadcast' ? 'در حال ارسال پیام...' : 'ارسال به تمام کاربران'}</span>
             </button>
           </div>
         </div>
@@ -461,25 +587,42 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                   <input
                     type="text"
                     value={replyDrafts[tk.id] || ''}
+                    disabled={isUpdating}
                     onChange={(e) =>
                       setReplyDrafts((prev) => ({ ...prev, [tk.id]: e.target.value }))
                     }
                     placeholder="پاسخ راهنمایی خود را برای این کاربر بنویسید..."
                     aria-label={`Reply to ticket ${tk.id}`}
-                    className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-100 focus:outline-none focus:border-blue-500"
+                    className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-100 focus:outline-none focus:border-blue-500 disabled:opacity-60"
                   />
                   <button
                     type="button"
+                    disabled={isUpdating}
                     onClick={() => {
                       const txt = (replyDrafts[tk.id] || '').trim();
                       if (!txt) return;
-                      onReplyTicket(tk.id, txt);
-                      setReplyDrafts((prev) => ({ ...prev, [tk.id]: '' }));
+                      runWithLoadingState(
+                        'tickets',
+                        `در حال ثبت و ارسال پاسخ به کاربر ${tk.userName}...`,
+                        `پاسخ پشتیبانی با موفقیت به تلگرام کاربر (${tk.userName}) ارسال شد.`,
+                        () => {
+                          onReplyTicket(tk.id, txt);
+                          setReplyDrafts((prev) => ({ ...prev, [tk.id]: '' }));
+                        }
+                      );
                     }}
-                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold transition-colors flex items-center gap-1.5 shrink-0"
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 disabled:cursor-not-allowed text-white rounded-xl text-xs font-semibold transition-colors flex items-center gap-1.5 shrink-0"
                   >
-                    <Send className="w-3.5 h-3.5" />
-                    <span>ارسال پاسخ به تلگرام کاربر</span>
+                    {updatingSection === 'tickets' ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Send className="w-3.5 h-3.5" />
+                    )}
+                    <span>
+                      {updatingSection === 'tickets'
+                        ? 'در حال ارسال پاسخ...'
+                        : 'ارسال پاسخ به تلگرام کاربر'}
+                    </span>
                   </button>
                 </div>
               </div>
@@ -509,20 +652,30 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
             {onSyncArzDigital && (
               <button
                 type="button"
+                disabled={isUpdating}
                 onClick={onSyncArzDigital}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-colors flex items-center gap-2 shrink-0"
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold transition-colors flex items-center gap-2 shrink-0"
               >
                 <RefreshCw className={`w-4 h-4 ${isSyncingArzDigital ? 'animate-spin' : ''}`} />
-                <span>دریافت آنی تمام نرخ‌ها از ArzDigital.com</span>
+                <span>
+                  {isSyncingArzDigital
+                    ? 'در حال همگام‌سازی با ArzDigital...'
+                    : 'دریافت آنی تمام نرخ‌ها از ArzDigital.com'}
+                </span>
               </button>
             )}
           </div>
 
-          <form onSubmit={handlePriceUpdateSubmit} className="grid grid-cols-1 sm:grid-cols-5 gap-3 items-end">
+          <form
+            onSubmit={handlePriceUpdateSubmit}
+            aria-busy={updatingSection === 'rates'}
+            className="grid grid-cols-1 sm:grid-cols-5 gap-3 items-end"
+          >
             <div>
               <label className="block text-xs text-slate-400 mb-1">انتخاب ارز</label>
               <select
                 value={editingCode}
+                disabled={isUpdating}
                 onChange={(e) => {
                   const code = e.target.value;
                   setEditingCode(code);
@@ -534,7 +687,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                   }
                 }}
                 aria-label="Select Asset to Edit"
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100"
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 disabled:opacity-60"
               >
                 {assets.map((a) => (
                   <option key={a.code} value={a.code}>
@@ -549,9 +702,10 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                 type="number"
                 step="any"
                 value={editTomanVal}
+                disabled={isUpdating}
                 onChange={(e) => setEditTomanVal(e.target.value)}
                 aria-label="New Price Toman"
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-emerald-400 font-bold"
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-emerald-400 font-bold disabled:opacity-60"
               />
             </div>
             <div>
@@ -560,9 +714,10 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                 type="number"
                 step="any"
                 value={editPriceVal}
+                disabled={isUpdating}
                 onChange={(e) => setEditPriceVal(e.target.value)}
                 aria-label="New Price USD"
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-slate-100"
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-slate-100 disabled:opacity-60"
               />
             </div>
             <div>
@@ -571,16 +726,21 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                 type="number"
                 step="any"
                 value={editPnlVal}
+                disabled={isUpdating}
                 onChange={(e) => setEditPnlVal(e.target.value)}
                 aria-label="New 24h PnL Percentage"
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-slate-100"
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-slate-100 disabled:opacity-60"
               />
             </div>
             <button
               type="submit"
-              className="py-2 px-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold transition-colors"
+              disabled={isUpdating}
+              className="py-2 px-4 bg-blue-600 hover:bg-blue-500 disabled:opacity-60 disabled:cursor-not-allowed text-white rounded-xl text-xs font-semibold transition-colors flex items-center justify-center gap-1.5"
             >
-              اعمال فوری در ربات و مینی‌اپ
+              {updatingSection === 'rates' && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />}
+              <span>
+                {updatingSection === 'rates' ? 'در حال اعمال نرخ...' : 'اعمال فوری در ربات و مینی‌اپ'}
+              </span>
             </button>
           </form>
 
@@ -625,7 +785,11 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
             <div>Valid Until: {sslStatus.expires}</div>
           </div>
 
-          <form onSubmit={handleIssueSsl} className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+          <form
+            onSubmit={handleIssueSsl}
+            aria-busy={updatingSection === 'ssl'}
+            className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end"
+          >
             <div>
               <label className="block text-xs text-slate-300 mb-1">
                 دامنه، ساب‌دامنه یا آی‌پی سرور (Domain / Subdomain / IP)
@@ -633,10 +797,11 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
               <input
                 type="text"
                 value={sslHost}
+                disabled={isUpdating}
                 onChange={(e) => setSslHost(e.target.value)}
                 placeholder="bot.yourdomain.com or 185.x.x.x"
                 aria-label="SSL Target Domain or IP"
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs font-mono text-slate-100"
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs font-mono text-slate-100 disabled:opacity-60"
                 dir="ltr"
               />
             </div>
@@ -645,17 +810,22 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
               <input
                 type="email"
                 value={sslEmail}
+                disabled={isUpdating}
                 onChange={(e) => setSslEmail(e.target.value)}
                 aria-label="SSL Email"
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs font-mono text-slate-100"
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs font-mono text-slate-100 disabled:opacity-60"
                 dir="ltr"
               />
             </div>
             <button
               type="submit"
-              className="py-2 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold transition-colors"
+              disabled={isUpdating}
+              className="py-2 px-4 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 disabled:cursor-not-allowed text-white rounded-xl text-xs font-semibold transition-colors flex items-center justify-center gap-1.5"
             >
-              صدور و فعال‌سازی خودکار SSL
+              {updatingSection === 'ssl' && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />}
+              <span>
+                {updatingSection === 'ssl' ? 'در حال صدور گواهی SSL...' : 'صدور و فعال‌سازی خودکار SSL'}
+              </span>
             </button>
           </form>
         </div>
@@ -665,6 +835,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
       {activeTab === 'settings' && (
         <form
           onSubmit={handleSaveSettings}
+          aria-busy={updatingSection === 'settings'}
           className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4"
         >
           <h3 className="text-base font-bold text-slate-100">
@@ -679,9 +850,10 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
               <input
                 type="text"
                 value={newUser}
+                disabled={isUpdating}
                 onChange={(e) => setNewUser(e.target.value)}
                 aria-label="New Admin Username"
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs font-mono text-slate-100"
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs font-mono text-slate-100 disabled:opacity-60"
                 dir="ltr"
               />
             </div>
@@ -692,9 +864,10 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
               <input
                 type="text"
                 value={newPass}
+                disabled={isUpdating}
                 onChange={(e) => setNewPass(e.target.value)}
                 aria-label="New Admin Password"
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs font-mono text-slate-100"
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs font-mono text-slate-100 disabled:opacity-60"
                 dir="ltr"
               />
             </div>
@@ -703,9 +876,10 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
               <input
                 type="text"
                 value={newGithub}
+                disabled={isUpdating}
                 onChange={(e) => setNewGithub(e.target.value)}
                 aria-label="Creator GitHub URL"
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs font-mono text-slate-100"
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs font-mono text-slate-100 disabled:opacity-60"
                 dir="ltr"
               />
             </div>
@@ -714,9 +888,10 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
               <input
                 type="text"
                 value={newTon}
+                disabled={isUpdating}
                 onChange={(e) => setNewTon(e.target.value)}
                 aria-label="TON Wallet Address"
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs font-mono text-slate-100"
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs font-mono text-slate-100 disabled:opacity-60"
                 dir="ltr"
               />
             </div>
@@ -725,9 +900,10 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
               <input
                 type="text"
                 value={newTron}
+                disabled={isUpdating}
                 onChange={(e) => setNewTron(e.target.value)}
                 aria-label="TRON Wallet Address"
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs font-mono text-slate-100"
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs font-mono text-slate-100 disabled:opacity-60"
                 dir="ltr"
               />
             </div>
@@ -735,9 +911,15 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
 
           <button
             type="submit"
-            className="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold transition-colors"
+            disabled={isUpdating}
+            className="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-60 disabled:cursor-not-allowed text-white rounded-xl text-xs font-semibold transition-colors inline-flex items-center gap-2"
           >
-            ذخیره تغییرات در کل سیستم
+            {updatingSection === 'settings' && <Loader2 className="w-4 h-4 animate-spin shrink-0" />}
+            <span>
+              {updatingSection === 'settings'
+                ? 'در حال ذخیره و اعمال تغییرات...'
+                : 'ذخیره تغییرات در کل سیستم'}
+            </span>
           </button>
         </form>
       )}
