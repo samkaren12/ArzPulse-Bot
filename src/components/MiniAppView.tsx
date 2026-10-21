@@ -106,27 +106,61 @@ export const MiniAppView: React.FC<MiniAppViewProps> = ({
   const pnl7dDollar = (investAmount * selectedAsset.change7d) / 100;
 
   return (
-    <div className="space-y-6" dir={t.dir}>
-      {/* Mini App Header Banner */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+    <div className="space-y-5" dir={t.dir}>
+      {/* Live Market Horizontal Ticker Strip */}
+      <div className="bg-slate-950/90 border border-cyan-500/20 rounded-xl px-3.5 py-2 flex items-center gap-3 overflow-x-auto no-scrollbar" dir="ltr">
+        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-[10px] font-mono font-bold text-emerald-400 shrink-0">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+          LIVE MARKET
+        </span>
+        {assets.slice(0, 10).map((item) => {
+          const isUp = item.change24h >= 0;
+          return (
+            <button
+              key={item.code}
+              type="button"
+              onClick={() => setSelectedAssetCode(item.code)}
+              className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-lg border text-xs font-mono shrink-0 transition-colors ${
+                selectedAssetCode === item.code
+                  ? 'bg-emerald-500/15 border-emerald-500/40 text-white'
+                  : 'bg-slate-900/90 border-slate-800 text-slate-300 hover:border-slate-700'
+              }`}
+            >
+              <span className="font-bold text-slate-100">{item.code}</span>
+              <span className="text-slate-400 tabular-nums">{formatCurrencyValue(getAssetTomanPrice(item, assets))} T</span>
+              <span className={`font-bold tabular-nums ${isUp ? 'text-emerald-400' : 'text-rose-400'}`}>
+                {isUp ? '+' : ''}
+                {item.change24h.toFixed(2)}%
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Mini App Header Banner (Strictly for Regular Users) */}
+      <div className="bg-gradient-to-r from-slate-900 via-slate-900 to-slate-950 border border-emerald-500/25 rounded-2xl p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-xl">
         <div>
-          <div className="flex items-center gap-2 text-xs text-blue-400 font-medium mb-1">
-            <span>Telegram WebApp Mini App</span>
+          <div className="flex items-center gap-2 text-xs text-blue-400 font-medium mb-1.5 flex-wrap">
+            <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-bold">
+              🚀 مینی‌اپ اختصاصی کاربران عادی (/miniapp)
+            </span>
+            <span>·</span>
+            <span className="text-slate-400">بدون دکمه پنل مدیریت مالک</span>
             <span>·</span>
             <a
               href={ARZDIGITAL_USD_URL}
               target="_blank"
               rel="noreferrer"
-              className="text-emerald-400 hover:underline flex items-center gap-1"
+              className="text-cyan-400 hover:underline flex items-center gap-1"
             >
-              <span>منبع نرخ: ArzDigital.com</span>
+              <span>فید زنده: ArzDigital.com</span>
               <ExternalLink className="w-3 h-3" />
             </a>
             <span>·</span>
             <span className="font-mono text-slate-400">Sync: {lastArzSyncTime}</span>
           </div>
-          <h2 className="text-xl font-bold text-slate-100">
-            {t.btnMiniApp} — پنل پیشرفته نرخ، نمودار سود/زیان و تبدیل ارز
+          <h2 className="text-xl font-extrabold text-slate-100">
+            {t.btnMiniApp} — ترمینال زنده نرخ ارز، کریپتو و ماشین‌حساب تبدیل آنی
           </h2>
         </div>
 
@@ -135,10 +169,10 @@ export const MiniAppView: React.FC<MiniAppViewProps> = ({
             <button
               type="button"
               onClick={onSyncArzDigital}
-              className="px-3 py-2 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-xs font-semibold text-emerald-300 transition-colors flex items-center gap-1.5"
+              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white transition-colors flex items-center gap-1.5 shadow-lg shadow-emerald-600/20"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isSyncingArzDigital ? 'animate-spin' : ''}`} />
-              <span>بروزرسانی از ArzDigital</span>
+              <span>بروزرسانی زنده ArzDigital</span>
             </button>
           )}
 

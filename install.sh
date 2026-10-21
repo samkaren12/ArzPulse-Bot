@@ -112,19 +112,15 @@ mkdir -p "$INSTALL_DIR" /var/www/html
 BOT_USERNAME=$(curl -s --max-time 8 "https://api.telegram.org/bot${BOT_TOKEN}/getMe" | grep -oE '"username":"[^"]+"' | head -n 1 | cut -d'"' -f4 || true)
 BOT_USERNAME="${BOT_USERNAME:-ArzPulseBot}"
 
-if [ -n "$INPUT_HOST" ]; then
-  echo "$INPUT_HOST" > "$INSTALL_DIR/custom_domain.txt"
-  INITIAL_WEB_URL="https://$INPUT_HOST"
-else
-  INITIAL_WEB_URL="https://$TARGET_HOST"
-fi
+echo "$TARGET_HOST" > "$INSTALL_DIR/custom_domain.txt"
+INITIAL_WEB_URL="https://$TARGET_HOST"
 
 cat << EOF > "$INSTALL_DIR/.env"
 BOT_TOKEN="$BOT_TOKEN"
 OWNER_ID="$OWNER_ID"
 BOT_USERNAME="$BOT_USERNAME"
 SERVER_IP="$SERVER_IP"
-CUSTOM_DOMAIN="$INPUT_HOST"
+CUSTOM_DOMAIN="$TARGET_HOST"
 WEB_PANEL_URL="$INITIAL_WEB_URL"
 ADMIN_USERNAME="owner_admin"
 ADMIN_PASSWORD="ArzPanel@2026#Pro"
@@ -258,6 +254,27 @@ def get_custom_domain() -> str:
      return h
  except Exception:
   pass
+ try:
+  if os.path.exists(SSL_STATUS_FILE):
+   with open(SSL_STATUS_FILE, "r", encoding="utf-8") as f:
+    data = json.load(f)
+    if isinstance(data, dict):
+     h = sanitize_host(str(data.get("host", "")))
+     if h:
+      return h
+ except Exception:
+  pass
+ try:
+  if os.path.exists(ENV_FILE):
+   with open(ENV_FILE, "r", encoding="utf-8") as ef:
+    for ln in ef:
+     if ln.startswith("CUSTOM_DOMAIN="):
+      val = ln.split("=", 1)[1].strip().strip('"').strip("'")
+      h = sanitize_host(val)
+      if h:
+       return h
+ except Exception:
+  pass
  env_dom = sanitize_host(_clean_env("CUSTOM_DOMAIN", ""))
  if env_dom:
   return env_dom
@@ -266,10 +283,28 @@ def save_custom_domain(host: str) -> str:
  clean = sanitize_host(host)
  if not clean:
   return ""
+ is_ip = bool(re.match(r"^[0-9]+.[0-9]+.[0-9]+.[0-9]+$", clean))
+ default_mode = (
+  "OpenSSL High-Security SAN IP Certificate (Port 443)"
+  if is_ip
+  else "Let's Encrypt Official SSL + Nginx TLS 1.3 (Port 443)"
+ )
  try:
   os.makedirs("/opt/arzpulse", exist_ok=True)
   with open(CUSTOM_DOMAIN_FILE, "w", encoding="utf-8") as f:
    f.write(clean)
+  with open(SSL_STATUS_FILE, "w", encoding="utf-8") as sf:
+   json.dump(
+    {
+     "active": True,
+     "host": clean,
+     "httpsUrl": f"https://{clean}",
+     "httpUrl": f"http://{clean}",
+     "mode": default_mode,
+    },
+    sf,
+    ensure_ascii=False,
+   )
   os.environ["CUSTOM_DOMAIN"] = clean
   os.environ["WEB_PANEL_URL"] = f"https://{clean}"
   if os.path.exists(ENV_FILE):
@@ -296,6 +331,40 @@ def save_custom_domain(host: str) -> str:
  except Exception:
   pass
  return clean
+def save_admin_credentials(new_user: str, new_pass: str):
+ global ADMIN_USERNAME, ADMIN_PASSWORD
+ u = new_user.strip()
+ p = new_pass.strip()
+ if not u or not p:
+  return
+ ADMIN_USERNAME = u
+ ADMIN_PASSWORD = p
+ os.environ["ADMIN_USERNAME"] = u
+ os.environ["ADMIN_PASSWORD"] = p
+ try:
+  if os.path.exists(ENV_FILE):
+   with open(ENV_FILE, "r", encoding="utf-8") as ef:
+    lines = ef.readlines()
+   new_lines = []
+   found_u = False
+   found_p = False
+   for ln in lines:
+    if ln.startswith("ADMIN_USERNAME="):
+     new_lines.append(f'ADMIN_USERNAME="{u}"\n')
+     found_u = True
+    elif ln.startswith("ADMIN_PASSWORD="):
+     new_lines.append(f'ADMIN_PASSWORD="{p}"\n')
+     found_p = True
+    else:
+     new_lines.append(ln)
+   if not found_u:
+    new_lines.append(f'ADMIN_USERNAME="{u}"\n')
+   if not found_p:
+    new_lines.append(f'ADMIN_PASSWORD="{p}"\n')
+   with open(ENV_FILE, "w", encoding="utf-8") as ef:
+    ef.writelines(new_lines)
+ except Exception:
+  pass
 def get_ssl_status() -> Dict[str, Any]:
  custom = get_custom_domain()
  ip = detect_server_ip()
@@ -998,22 +1067,25 @@ async def show_owner_panel(message: Message, state: FSMContext):
  https_url = get_https_panel_url()
  cf_tunnel = get_cloudflare_tunnel_url()
  http_url = f"http://{custom_dom}" if custom_dom else (f"http://{ip}" if ip and ip != "127.0.0.1" else get_http_direct_url())
+ admin_login_https = f"{https_url}/admin"
  admin_auto_https = f"{https_url}/admin?autologin=1&owner_id={uid}"
+ admin_login_http = f"{http_url}/admin"
  admin_auto_http = f"{http_url}/admin?autologin=1&owner_id={uid}"
- admin_ip_http = f"http://{ip}/admin?autologin=1&owner_id={uid}"
- admin_port_8080 = f"http://{custom_dom or ip}:8080/admin?autologin=1&owner_id={uid}"
+ admin_ip_http = f"http://{ip}/admin"
+ admin_port_8080 = f"http://{custom_dom or ip}:8080/admin"
  buttons = []
  if is_valid_https_url(https_url) and message.chat.type == "private":
-  buttons.append([InlineKeyboardButton(text="👑 باز کردن وب‌پنل مدیریت داخل تلگرام (ورود خودکار)", web_app=WebAppInfo(url=admin_auto_https))])
+  buttons.append([InlineKeyboardButton(text="👑 باز کردن وب‌پنل مدیریت در تلگرام (ورود با رمز/خودکار)", web_app=WebAppInfo(url=admin_login_https))])
  if is_valid_https_url(https_url):
-  buttons.append([InlineKeyboardButton(text="🔒 ورود مستقیم وب‌پنل با SSL (HTTPS)", url=admin_auto_https)])
+  buttons.append([InlineKeyboardButton(text="🔐 ورود به وب‌پنل مدیریت با نام کاربری و رمز (HTTPS)", url=admin_login_https)])
+  buttons.append([InlineKeyboardButton(text="⚡ ورود خودکار تک‌کلیکی به وب‌پنل مدیریت (HTTPS)", url=admin_auto_https)])
  if cf_tunnel and cf_tunnel != https_url and is_valid_https_url(cf_tunnel):
-  buttons.append([InlineKeyboardButton(text="☁️ ورود وب‌پنل با تانل Cloudflare (HTTPS)", url=f"{cf_tunnel}/admin?autologin=1&owner_id={uid}")])
- buttons.append([InlineKeyboardButton(text="🌐 ورود مستقیم وب‌پنل روی دامنه/آی‌پی (Port 80)", url=admin_auto_http)])
+  buttons.append([InlineKeyboardButton(text="☁️ وب‌پنل مدیریت روی تانل Cloudflare (HTTPS)", url=f"{cf_tunnel}/admin")])
+ buttons.append([InlineKeyboardButton(text="🌐 وب‌پنل مدیریت روی دامنه/آی‌پی (Port 80)", url=admin_login_http)])
  if custom_dom and ip and ip != "127.0.0.1":
-  buttons.append([InlineKeyboardButton(text=f"🖥 ورود مستقیم وب‌پنل روی آی‌پی ({ip})", url=admin_ip_http)])
- buttons.append([InlineKeyboardButton(text="🖥 ورود مستقیم وب‌پنل (Port 8080)", url=admin_port_8080)])
- buttons.append([InlineKeyboardButton(text="🔒 ست کردن دامنه / ساب‌دامنه و دریافت SSL", callback_data="owner_set_ssl")])
+  buttons.append([InlineKeyboardButton(text=f"🖥 وب‌پنل مدیریت مستقیم روی آی‌پی ({ip})", url=admin_ip_http)])
+ buttons.append([InlineKeyboardButton(text="🖥 وب‌پنل مدیریت روی پورت 8080", url=admin_port_8080)])
+ buttons.append([InlineKeyboardButton(text="🔒 ثبت دائم دامنه / ساب‌دامنه / آی‌پی و صدور SSL", callback_data="owner_set_ssl")])
  buttons.append([
   InlineKeyboardButton(text="📢 ارسال پیام همگانی", callback_data="owner_broadcast"),
   InlineKeyboardButton(text="🔄 بروزرسانی از ArzDigital", callback_data="owner_sync_rates"),
@@ -1024,28 +1096,29 @@ async def show_owner_panel(message: Message, state: FSMContext):
  ])
  kb = InlineKeyboardMarkup(inline_keyboard=buttons)
  ssl_info = get_ssl_status()
- dom_badge = f"<code>{custom_dom}</code> (ثبت دائم + SSL فعال)" if custom_dom else "<i>ثبت نشده (استفاده از آی‌پی / تانل)</i>"
+ dom_badge = f"<code>{custom_dom}</code> (ثبت دائم + SSL فعال)" if custom_dom else f"<code>{ip}</code> (آی‌پی سرور)"
  text = (
-  f"👑 <b>وب‌پنل مدیریت اختصاصی مالک ربات (Owner Web Admin Console)</b>\n\n"
-  f"👥 <b>کاربران فعال ربات:</b> <code>{len(total_users) or 1}</code>\n"
-  f"🛟 <b>تیکت‌های پشتیبانی:</b> <code>{len(support_tickets)}</code>\n"
-  f"🌐 <b>دامنه / ساب‌دامنه ثبت‌شده:</b> {dom_badge}\n"
+  f"👑 <b>پنل تحت وب مدیریت فوق‌حرفه‌ای مالک (Owner Web Console)</b>\n\n"
+  f"🔐 <b>اطلاعات ورود اختصاصی شما به وب‌پنل مدیریت:</b>\n"
+  f"👤 <b>نام کاربری (Username):</b> <code>{ADMIN_USERNAME}</code>\n"
+  f"🔑 <b>رمز عبور (Password):</b> <code>{ADMIN_PASSWORD}</code>\n\n"
+  f"🌐 <b>دامنه / ساب‌دامنه / آی‌پی ثبت‌شده با SSL:</b> {dom_badge}\n"
   f"🔒 <b>وضعیت گواهی SSL:</b> <code>{ssl_info.get('mode', 'Active')}</code>\n"
-  f"👤 <b>نام کاربری پنل (Username):</b> <code>{ADMIN_USERNAME}</code>\n"
-  f"🔑 <b>رمز عبور پنل (Password):</b> <code>{ADMIN_PASSWORD}</code>\n\n"
-  f"🔒 <b>لینک ورود خودکار HTTPS وب‌پنل:</b>\n{admin_auto_https}\n\n"
-  f"🌐 <b>لینک ورود مستقیم HTTP (پورت 80):</b>\n{admin_auto_http}\n\n"
-  f"🖥 <b>لینک ورود مستقیم پورت 8080:</b>\n{admin_port_8080}\n\n"
+  f"👥 <b>کاربران فعال:</b> <code>{len(total_users) or 1}</code> | 🛟 <b>تیکت‌ها:</b> <code>{len(support_tickets)}</code>\n\n"
+  f"🔐 <b>آدرس وب‌پنل مدیریت مالک (ورود با نام کاربری و رمز):</b>\n{admin_login_https}\n\n"
+  f"🚀 <b>آدرس مینی‌اپ مخصوص کاربران عادی:</b>\n{https_url}/miniapp\n\n"
+  f"🌐 <b>لینک بدون فیلتر HTTP (پورت 80):</b>\n{admin_login_http}\n\n"
   f"🛠 <b>دستور مدیریت سرور:</b> <code>sudo arz</code>\n\n"
-  f"👇 برای ورود به وب‌پنل یا ست کردن دامنه/ساب‌دامنه و SSL روی دکمه‌های زیر بزنید:"
+  f"👇 برای ورود به وب‌پنل مدیریت یا ثبت دائم دامنه/ساب‌دامنه/آی‌پی با SSL روی دکمه‌های زیر بزنید:"
  )
  try:
   await message.answer(text, reply_markup=kb, parse_mode="HTML")
  except Exception:
   fallback_kb = InlineKeyboardMarkup(inline_keyboard=[
-   [InlineKeyboardButton(text="🌐 ورود مستقیم وب‌پنل (Port 80)", url=admin_auto_http)],
-   [InlineKeyboardButton(text="🖥 ورود مستقیم وب‌پنل (Port 8080)", url=admin_port_8080)],
-   [InlineKeyboardButton(text="🔒 ست کردن دامنه / ساب‌دامنه و دریافت SSL", callback_data="owner_set_ssl")],
+   [InlineKeyboardButton(text="🔐 وب‌پنل مدیریت با نام کاربری و رمز (Port 80)", url=admin_login_http)],
+   [InlineKeyboardButton(text="⚡ ورود خودکار وب‌پنل (Port 80)", url=admin_auto_http)],
+   [InlineKeyboardButton(text="🖥 وب‌پنل مدیریت (Port 8080)", url=admin_port_8080)],
+   [InlineKeyboardButton(text="🔒 ثبت دائم دامنه / ساب‌دامنه / آی‌پی و صدور SSL", callback_data="owner_set_ssl")],
    [
     InlineKeyboardButton(text="📢 ارسال پیام همگانی", callback_data="owner_broadcast"),
     InlineKeyboardButton(text="🔄 بروزرسانی از ArzDigital", callback_data="owner_sync_rates"),
@@ -1062,9 +1135,9 @@ async def cb_owner_set_ssl(callback: CallbackQuery, state: FSMContext):
  cur_dom = get_custom_domain() or detect_server_ip()
  if callback.message:
   await callback.message.answer(
-   "🔒 <b>ست کردن دائم دامنه / ساب‌دامنه / آی‌پی و صدور خودکار SSL:</b>\n\n"
-   f"📌 هاست فعلی: <code>{cur_dom}</code>\n\n"
-   "لطفاً نام <b>دامنه</b>، <b>ساب‌دامنه</b> (مثلاً <code>bot.example.com</code>) یا <b>آی‌پی سرور</b> خود را ارسال کنید تا به صورت دائمی ذخیره شود و گواهی SSL روی پورت 443 برای آن صادر و فعال گردد:",
+   "🔒 <b>ثبت دائمی دامنه / ساب‌دامنه / آی‌پی و صدور گواهی SSL:</b>\n\n"
+   f"📌 هاست ثبت‌شده فعلی: <code>{cur_dom}</code>\n\n"
+   "لطفاً نام <b>دامنه</b>، <b>ساب‌دامنه</b> (مثلاً <code>sub.example.com</code>) یا <b>آی‌پی سرور</b> خود را ارسال کنید تا گواهی SSL روی پورت 443 صادر شود و همان آدرس به صورت دائمی روی ربات، مینی‌اپ و وب‌پنل ثبت بماند:",
    parse_mode="HTML",
   )
 @router.message(BotStates.waiting_for_ssl_host)
@@ -1077,34 +1150,38 @@ async def handle_ssl_host_input(message: Message, state: FSMContext):
  raw = (message.text or "").strip()
  clean = sanitize_host(raw)
  if not clean:
-  await message.answer("❌ دامنه یا ساب‌دامنه وارد شده معتبر نیست. لطفاً مجدداً از پنل مدیریت تلاش کنید.")
+  await message.answer("❌ دامنه، ساب‌دامنه یا آی‌پی وارد شده معتبر نیست. لطفاً مجدداً از پنل مدیریت تلاش کنید.")
   return
  wait_msg = await message.answer(
-  f"⏳ در حال ثبت دائمی <code>{clean}</code> در کانفیگ Nginx و صدور گواهی SSL (Let's Encrypt / OpenSSL)... لطفاً چند ثانیه صبر کنید.",
+  f"⏳ در حال ثبت دائمی <code>{clean}</code> در کانفیگ سرور و صدور گواهی SSL روی پورت 443... لطفاً چند ثانیه صبر کنید.",
   parse_mode="HTML",
  )
  res = await apply_ssl_for_host(clean)
- admin_https = f"https://{clean}/admin?autologin=1&owner_id={uid}"
+ admin_login_https = f"https://{clean}/admin"
+ admin_auto_https = f"https://{clean}/admin?autologin=1&owner_id={uid}"
  mini_https = f"https://{clean}/miniapp"
  kb = InlineKeyboardMarkup(
   inline_keyboard=[
-   [InlineKeyboardButton(text="👑 ورود به وب‌پنل مدیریت روی دامنه جدید (HTTPS)", url=admin_https)],
-   [InlineKeyboardButton(text="🚀 باز کردن مینی‌اپ روی دامنه جدید (HTTPS)", url=mini_https)],
+   [InlineKeyboardButton(text="🔐 ورود به وب‌پنل مدیریت با رمز (HTTPS)", url=admin_login_https)],
+   [InlineKeyboardButton(text="⚡ ورود خودکار به وب‌پنل مدیریت (HTTPS)", url=admin_auto_https)],
+   [InlineKeyboardButton(text="🚀 باز کردن مینی‌اپ کاربران (HTTPS)", url=mini_https)],
   ]
  )
  try:
   await wait_msg.edit_text(
-   f"✅ <b>دامنه / ساب‌دامنه با موفقیت ست شد و SSL فعال گردید!</b>\n\n"
-   f"🌐 <b>هاست دائمی:</b> <code>{clean}</code>\n"
-   f"🔒 <b>وضعیت SSL:</b> <code>{res.get('mode', 'Active')}</code>\n\n"
-   f"👑 <b>وب‌پنل مدیریت (مالک):</b>\n{admin_https}\n\n"
-   f"🚀 <b>لینک مینی‌اپ کاربران:</b>\n{mini_https}",
+   f"✅ <b>گواهی SSL صادر شد و <code>{clean}</code> به صورت دائمی ثبت گردید!</b>\n\n"
+   f"🌐 <b>آدرس دائمی ثبت‌شده:</b> <code>{clean}</code>\n"
+   f"🔒 <b>وضعیت گواهی SSL:</b> <code>{res.get('mode', 'Active')}</code>\n"
+   f"👤 <b>نام کاربری وب‌پنل:</b> <code>{ADMIN_USERNAME}</code>\n"
+   f"🔑 <b>رمز عبور وب‌پنل:</b> <code>{ADMIN_PASSWORD}</code>\n\n"
+   f"👑 <b>وب‌پنل مدیریت مالک:</b>\n{admin_login_https}\n\n"
+   f"🚀 <b>مینی‌اپ کاربران عادی:</b>\n{mini_https}",
    reply_markup=kb,
    parse_mode="HTML",
   )
  except Exception:
   await message.answer(
-   f"✅ دامنه <code>{clean}</code> با موفقیت ذخیره شد و SSL فعال گردید!\n{admin_https}",
+   f"✅ آدرس <code>{clean}</code> با موفقیت ثبت شد و گواهی SSL فعال گردید!\n{admin_login_https}",
    reply_markup=kb,
    parse_mode="HTML",
   )
@@ -1335,7 +1412,14 @@ async def fallback_asset_lookup(message: Message):
  await handle_natural_text_command(message)
 def get_rates_list() -> List[Dict[str, Any]]:
  return [
-  {"code": k, "name": v.get("name", k), "toman": v["toman"], "usd": v["price"], "change": v["change"]}
+  {
+   "code": k,
+   "name": v.get("name", k),
+   "type": v.get("type", "fiat"),
+   "toman": v["toman"],
+   "usd": v["price"],
+   "change": v["change"],
+  }
   for k, v in ASSETS_DB.items()
  ]
 async def api_rates(request):
@@ -1355,6 +1439,23 @@ async def api_rates(request):
   "ownerId": OWNER_ID,
   "tickets": list(reversed(support_tickets[-15:])),
  })
+async def api_admin_login(request):
+ body = await request.json()
+ u = (body.get("username") or "").strip()
+ p = (body.get("password") or "").strip()
+ if u == ADMIN_USERNAME and p == ADMIN_PASSWORD:
+  return web.json_response({"ok": True, "username": ADMIN_USERNAME})
+ return web.json_response({"ok": False, "error": "نام کاربری یا رمز عبور اشتباه است!"}, status=403)
+async def api_admin_credentials(request):
+ body = await request.json()
+ if body.get("username") != ADMIN_USERNAME or body.get("password") != ADMIN_PASSWORD:
+  return web.json_response({"ok": False, "error": "Unauthorized"}, status=403)
+ new_u = (body.get("newUsername") or "").strip()
+ new_p = (body.get("newPassword") or "").strip()
+ if not new_u or not new_p:
+  return web.json_response({"ok": False, "error": "نام کاربری و رمز جدید نمی‌توانند خالی باشند."}, status=400)
+ save_admin_credentials(new_u, new_p)
+ return web.json_response({"ok": True, "username": ADMIN_USERNAME, "password": ADMIN_PASSWORD})
 async def api_admin_ssl(request):
  body = await request.json()
  if body.get("username") != ADMIN_USERNAME or body.get("password") != ADMIN_PASSWORD:
@@ -1453,88 +1554,122 @@ WEB_HTML = r"""<!doctype html>
 <html lang="fa" dir="rtl">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>ArzPulse Pro — مینی‌اپ نرخ ارز و تبدیل (ArzDigital Live)</title>
+<title>__HDR_TITLE__</title>
 <style>
-:root{--bg:#050816;--card:rgba(15,23,42,0.92);--border:rgba(56,189,248,0.24);--emerald:#10b981;--blue:#3b82f6;--rose:#f43f5e;--text:#f8fafc;--muted:#94a3b8}
-*{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,-apple-system,Segoe UI,Tahoma,sans-serif}
-body{background:radial-gradient(circle at 15% 15%,rgba(16,185,129,0.16),transparent 40%),radial-gradient(circle at 85% 20%,rgba(59,130,246,0.16),transparent 45%),var(--bg);color:var(--text);min-height:100vh;padding:12px}
-.container{max-width:1100px;margin:0 auto}
-.header{background:var(--card);backdrop-filter:blur(14px);border:1px solid var(--border);border-radius:18px;padding:15px 18px;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;margin-bottom:16px;box-shadow:0 14px 36px rgba(0,0,0,0.45)}
+:root{--bg:#040711;--surface:#0b1120;--card:rgba(15,23,42,0.88);--card-hover:rgba(30,41,59,0.95);--border:rgba(56,189,248,0.18);--emerald:#10b981;--cyan:#06b6d4;--blue:#3b82f6;--amber:#f59e0b;--rose:#f43f5e;--text:#f8fafc;--muted:#94a3b8}
+*{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,-apple-system,'Segoe UI',Tahoma,sans-serif}
+body{background:radial-gradient(circle at 10% 10%,rgba(16,185,129,0.14),transparent 38%),radial-gradient(circle at 90% 15%,rgba(59,130,246,0.15),transparent 42%),radial-gradient(circle at 50% 90%,rgba(244,63,94,0.08),transparent 45%),var(--bg);color:var(--text);min-height:100vh;padding:0 0 28px 0;overflow-x:hidden}
+.ticker-wrap{background:rgba(2,6,23,0.95);border-bottom:1px solid rgba(56,189,248,0.18);padding:7px 14px;display:flex;align-items:center;gap:14px;overflow-x:auto;white-space:nowrap;scrollbar-width:none}
+.ticker-wrap::-webkit-scrollbar{display:none}
+.ticker-item{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;padding:3px 9px;border-radius:8px;background:rgba(15,23,42,0.9);border:1px solid rgba(148,163,184,0.14);cursor:pointer;transition:.2s}
+.ticker-item:hover{border-color:var(--emerald)}
+.container{max-width:1160px;margin:0 auto;padding:14px 12px 0}
+.header{background:linear-gradient(135deg,rgba(15,23,42,0.95),rgba(9,14,28,0.95));backdrop-filter:blur(16px);border:1px solid var(--border);border-radius:20px;padding:15px 18px;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;box-shadow:0 18px 42px rgba(0,0,0,0.55)}
 .brand{display:flex;align-items:center;gap:12px}
-.badge-icon{width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,#10b981,#2563eb);display:flex;align-items:center;justify-content:center;font-size:20px}
-.nav{display:flex;gap:8px;flex-wrap:wrap}
-.btn{border:1px solid rgba(255,255,255,0.14);background:#1e293b;color:#fff;padding:9px 13px;border-radius:11px;font-size:12.5px;font-weight:700;cursor:pointer;transition:.2s;display:inline-flex;align-items:center;gap:6px;text-decoration:none}
-.btn:hover{transform:translateY(-1px);border-color:var(--blue)}
-.btn:disabled{opacity:0.6;cursor:not-allowed}
+.badge-icon{width:46px;height:46px;border-radius:14px;background:linear-gradient(135deg,#10b981,#2563eb);display:flex;align-items:center;justify-content:center;font-size:22px;box-shadow:0 8px 20px rgba(16,185,129,0.3)}
+.pulse-dot{width:8px;height:8px;border-radius:50%;background:#10b981;display:inline-block;box-shadow:0 0 10px #10b981}
+.nav{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.btn{border:1px solid rgba(255,255,255,0.12);background:#1e293b;color:#fff;padding:9px 14px;border-radius:12px;font-size:12.5px;font-weight:700;cursor:pointer;transition:.2s;display:inline-flex;align-items:center;gap:6px;text-decoration:none}
+.btn:hover{transform:translateY(-1px);border-color:var(--cyan);box-shadow:0 6px 18px rgba(6,182,212,0.18)}
+.btn:disabled{opacity:0.55;cursor:not-allowed;transform:none}
 .btn-p{background:linear-gradient(135deg,#2563eb,#1d4ed8);border-color:#3b82f6}
 .btn-s{background:linear-gradient(135deg,#059669,#10b981);border-color:#34d399}
 .btn-d{background:linear-gradient(135deg,#e11d48,#f43f5e);border-color:#fb7185}
-.grid-2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;margin-bottom:16px}
-.grid-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:11px}
-.card{background:var(--card);border:1px solid rgba(148,163,184,0.18);border-radius:16px;padding:15px;box-shadow:0 10px 28px rgba(0,0,0,0.35)}
-.input,select,textarea{width:100%;background:#020617;border:1px solid rgba(148,163,184,0.28);color:#fff;padding:9px 11px;border-radius:10px;font-size:13px;outline:none;margin-top:5px}
-.res-box{margin-top:11px;padding:13px;border-radius:12px;background:linear-gradient(135deg,rgba(16,185,129,0.15),rgba(37,99,235,0.15));border:1px solid rgba(16,185,129,0.4);text-align:center}
-.up{color:#34d399;background:rgba(16,185,129,0.15);padding:3px 8px;border-radius:7px;font-size:11.5px;font-weight:700}
-.down{color:#fb7185;background:rgba(244,63,94,0.15);padding:3px 8px;border-radius:7px;font-size:11.5px;font-weight:700}
-.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;direction:ltr;display:inline-block}
+.btn-w{background:linear-gradient(135deg,#d97706,#f59e0b);border-color:#fbbf24;color:#020617}
+.grid-2{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-bottom:16px}
+.grid-4{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-bottom:16px}
+.grid-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(225px,1fr));gap:11px}
+.card{background:var(--card);backdrop-filter:blur(12px);border:1px solid rgba(148,163,184,0.16);border-radius:18px;padding:16px;box-shadow:0 12px 32px rgba(0,0,0,0.4);transition:.2s}
+.rate-card:hover{transform:translateY(-2px);border-color:rgba(16,185,129,0.45);background:var(--card-hover)}
+.kpi-card{background:linear-gradient(135deg,rgba(15,23,42,0.96),rgba(2,6,23,0.92));border:1px solid rgba(56,189,248,0.22);border-radius:16px;padding:14px}
+.input,select,textarea{width:100%;background:#020617;border:1px solid rgba(148,163,184,0.28);color:#fff;padding:10px 12px;border-radius:11px;font-size:13px;outline:none;margin-top:5px;transition:.2s}
+.input:focus,select:focus,textarea:focus{border-color:var(--cyan);box-shadow:0 0 0 3px rgba(6,182,212,0.15)}
+.res-box{margin-top:12px;padding:14px;border-radius:14px;background:linear-gradient(135deg,rgba(16,185,129,0.14),rgba(37,99,235,0.16));border:1px solid rgba(16,185,129,0.4);text-align:center}
+.chip-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.chip{background:#0f172a;border:1px solid rgba(148,163,184,0.24);color:#cbd5e1;padding:4px 10px;border-radius:8px;font-size:11.5px;font-weight:700;cursor:pointer;transition:.15s}
+.chip:hover,.chip.active{background:rgba(16,185,129,0.2);border-color:#10b981;color:#34d399}
+.up{color:#34d399;background:rgba(16,185,129,0.15);border:1px solid rgba(16,185,129,0.3);padding:3px 8px;border-radius:8px;font-size:11.5px;font-weight:700}
+.down{color:#fb7185;background:rgba(244,63,94,0.15);border:1px solid rgba(244,63,94,0.3);padding:3px 8px;border-radius:8px;font-size:11.5px;font-weight:700}
+.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;direction:ltr;display:inline-block;font-variant-numeric:tabular-nums}
 .hidden{display:none!important}
-.wbox{background:#020617;border:1px solid rgba(148,163,184,0.2);padding:8px 10px;border-radius:10px;font-size:11.5px;word-break:break-all;display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:6px}
+.wbox{background:#020617;border:1px solid rgba(148,163,184,0.2);padding:9px 11px;border-radius:11px;font-size:11.5px;word-break:break-all;display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:6px}
+.login-shell{max-width:460px;margin:28px auto;background:linear-gradient(145deg,rgba(15,23,42,0.98),rgba(2,6,23,0.98));border:1px solid rgba(244,63,94,0.38);border-radius:22px;padding:24px;box-shadow:0 24px 60px rgba(0,0,0,0.65)}
 </style>
 </head>
 <body>
+<div id="liveTickerBar" class="ticker-wrap"></div>
 <div class="container">
   <div class="header">
  <div class="brand">
    <div class="badge-icon">💎</div>
    <div>
-  <h1 id="hdrTitle" style="font-size:17px;font-weight:800">__HDR_TITLE__</h1>
-  <p style="font-size:11.5px;color:var(--muted);margin-top:2px">متصل به نرخ زنده ArzDigital.com • ربات: <span id="hdrBotUser" class="mono" style="color:#34d399">@__BOT_USER__</span></p>
+  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+    <h1 id="hdrTitle" style="font-size:17.5px;font-weight:800">__HDR_TITLE__</h1>
+    <span class="up" style="font-size:10.5px;display:inline-flex;align-items:center;gap:5px"><span class="pulse-dot"></span> LIVE FEED</span>
+  </div>
+  <p style="font-size:11.5px;color:var(--muted);margin-top:3px">نرخ لحظه‌ای ArzDigital.com • ربات تلگرام: <span id="hdrBotUser" class="mono" style="color:#34d399">@__BOT_USER__</span></p>
    </div>
  </div>
  <div class="nav">
-   <button type="button" class="btn btn-p" id="tabMiniBtn" onclick="switchView('miniapp')">🚀 مینی‌اپ و تبدیل ارز</button>
-   <button type="button" class="btn btn-d __ADMIN_BTN_HIDDEN__" id="tabAdminBtn" onclick="switchView('admin')">👑 وب‌پنل مدیریت ربات (فقط مالک)</button>
+   <button type="button" class="btn btn-p __MINI_NAV_BTN__" id="tabMiniBtn" onclick="switchView('miniapp')">🚀 مینی‌اپ کاربران</button>
+   <button type="button" class="btn btn-d __ADMIN_BTN_HIDDEN__" id="tabAdminBtn" onclick="switchView('admin')">👑 پنل مدیریت مالک</button>
+   <button type="button" class="btn hidden" id="btnLockAdmin" style="border-color:rgba(244,63,94,0.4);color:#fb7185" onclick="lockAdminSession()">🔒 قفل / خروج</button>
    <button type="button" class="btn btn-s" id="syncBtn" onclick="syncNow()">🔄 بروزرسانی زنده</button>
  </div>
   </div>
-  <div class="card" style="margin-bottom:16px;border-color:rgba(16,185,129,0.35)">
- <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px">
-   <div>
-  <h2 style="font-size:14px;color:#34d399">➕ افزودن مستقیم ربات به گروه و کانال تلگرام</h2>
-  <p style="font-size:11.5px;color:var(--muted);margin-top:2px">با کلیک روی دکمه‌های روبرو، لیست گروه‌ها یا کانال‌های تلگرام شما باز شده و ربات خودکار اضافه می‌شود:</p>
-   </div>
-   <div style="display:flex;gap:8px;flex-wrap:wrap">
-  <a id="btnAddGroup" href="tg://resolve?domain=__BOT_USER__&startgroup=true" class="btn btn-s" onclick="return addBotToGroup(event)">👥 افزودن ربات به گروه تلگرام</a>
-  <a id="btnAddChannel" href="tg://resolve?domain=__BOT_USER__&startchannel&admin=post_messages+edit_messages+delete_messages" class="btn btn-p" onclick="return addBotToChannel(event)">📢 افزودن ربات به کانال تلگرام</a>
+  <!-- ================= USER MINI APP VIEW (FOR REGULAR USERS) ================= -->
+  <div id="viewMiniApp" class="__MINI_HIDDEN__">
+ <div class="card" style="margin-bottom:16px;border-color:rgba(16,185,129,0.35);background:linear-gradient(135deg,rgba(16,185,129,0.1),rgba(15,23,42,0.92))">
+   <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px">
+  <div>
+    <h2 style="font-size:14.5px;color:#34d399">➕ افزودن مستقیم ربات به گروه و کانال تلگرام</h2>
+    <p style="font-size:11.5px;color:var(--muted);margin-top:2px">ربات را به گروه یا کانال خود اضافه کنید تا تابلوی نرخ لحظه‌ای ارز و رمزارز را خودکار منتشر کند:</p>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <a id="btnAddGroup" href="tg://resolve?domain=__BOT_USER__&startgroup=true" class="btn btn-s" onclick="return addBotToGroup(event)">👥 افزودن به گروه تلگرام</a>
+    <a id="btnAddChannel" href="tg://resolve?domain=__BOT_USER__&startchannel&admin=post_messages+edit_messages+delete_messages" class="btn btn-p" onclick="return addBotToChannel(event)">📢 افزودن به کانال تلگرام</a>
+  </div>
    </div>
  </div>
-  </div>
-  <div id="viewMiniApp" class="__MINI_HIDDEN__">
  <div class="grid-2">
-   <div class="card">
-  <h2 style="font-size:15px;color:#34d399;margin-bottom:10px">🔄 ماشین‌حساب تبدیل دقیق ارز و کریپتو (ArzDigital)</h2>
-  <label style="font-size:11.5px;color:var(--muted)">مقدار (Amount):</label>
+   <div class="card" style="border-color:rgba(56,189,248,0.28)">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+    <h2 style="font-size:15px;color:#34d399">🔄 ماشین‌حساب تبدیل آنی ارز و رمزارز</h2>
+    <button type="button" class="btn" style="padding:5px 10px;font-size:11.5px;border-color:rgba(56,189,248,0.35);color:#38bdf8" onclick="swapConvertAssets()">⇄ جابجایی ارزها</button>
+  </div>
+  <label style="font-size:11.5px;color:var(--muted)">مقدار مورد نظر (Amount):</label>
   <input id="convAmt" class="input mono" type="number" value="1" step="any" oninput="runConvert()">
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px">
-    <div><label style="font-size:11.5px;color:var(--muted)">از ارز مبدا:</label><select id="convFrom" onchange="runConvert()"></select></div>
-    <div><label style="font-size:11.5px;color:var(--muted)">به ارز مقصد:</label><select id="convTo" onchange="runConvert()"></select></div>
+  <div class="chip-row">
+    <button type="button" class="chip mono" onclick="setConvPreset(1)">1</button>
+    <button type="button" class="chip mono" onclick="setConvPreset(10)">10</button>
+    <button type="button" class="chip mono" onclick="setConvPreset(50)">50</button>
+    <button type="button" class="chip mono" onclick="setConvPreset(100)">100</button>
+    <button type="button" class="chip mono" onclick="setConvPreset(500)">500</button>
+    <button type="button" class="chip mono" onclick="setConvPreset(1000)">1,000</button>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
+    <div><label style="font-size:11.5px;color:var(--muted)">از ارز مبدا (From):</label><select id="convFrom" onchange="runConvert()"></select></div>
+    <div><label style="font-size:11.5px;color:var(--muted)">به ارز مقصد (To):</label><select id="convTo" onchange="runConvert()"></select></div>
   </div>
   <div class="res-box">
-    <div id="convResultMain" class="mono" style="font-size:19px;font-weight:800;color:#34d399">1 USD = 3.0120 TRX</div>
-    <div id="convResultToman" style="font-size:12.5px;color:#cbd5e1;margin-top:5px">معادل تومانی: 262,400 تومان</div>
-    <div id="convResultUnit" class="mono" style="font-size:11px;color:var(--muted);margin-top:3px">1 USD = 3.0120 TRX</div>
+    <div id="convResultMain" class="mono" style="font-size:20px;font-weight:800;color:#34d399">1 USD = 3.0120 TRX</div>
+    <div id="convResultToman" style="font-size:13px;color:#e2e8f0;margin-top:6px;font-weight:700">🇮🇷 معادل تومانی: 262,400 تومان</div>
+    <div id="convResultUnit" class="mono" style="font-size:11px;color:var(--muted);margin-top:4px">1 USD = 3.0120 TRX</div>
   </div>
    </div>
-   <div class="card">
+   <div class="card" style="border-color:rgba(59,130,246,0.28)">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-    <h2 style="font-size:15px;color:#60a5fa">📈 نمودار سود و زیان ۲۴ ساعته (<span id="chartTitleCode">USD</span>)</h2>
-    <span id="chartChangeBadge" class="up">+0.00%</span>
+    <div>
+   <h2 style="font-size:15px;color:#60a5fa">📈 نمودار نوسان و سود/زیان ۲۴ ساعته</h2>
+   <p id="chartTitleCode" class="mono" style="font-size:12px;color:#cbd5e1;margin-top:2px">USD (262,400 تومان)</p>
+    </div>
+    <span id="chartChangeBadge" class="up mono">+0.00%</span>
   </div>
-  <svg id="pnlSvg" viewBox="0 0 400 125" style="width:100%;height:125px;background:#020617;border-radius:11px;border:1px solid rgba(148,163,184,0.16)"></svg>
-  <div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(148,163,184,0.15)">
-    <h3 style="font-size:12.5px;margin-bottom:5px">🛟 ارسال پیام مستقیم به پشتیبانی ربات:</h3>
+  <svg id="pnlSvg" viewBox="0 0 400 135" style="width:100%;height:135px;background:#020617;border-radius:13px;border:1px solid rgba(148,163,184,0.16)"></svg>
+  <div style="margin-top:11px;padding-top:11px;border-top:1px solid rgba(148,163,184,0.15)">
+    <h3 style="font-size:12.5px;color:#38bdf8;margin-bottom:5px">🛟 ارتباط مستقیم با پشتیبانی ربات:</h3>
     <div style="display:flex;gap:7px">
-   <input id="supInput" class="input" style="margin-top:0" placeholder="پیام یا سوال خود را بنویسید...">
+   <input id="supInput" class="input" style="margin-top:0" placeholder="سوال یا پیام خود را برای پشتیبانی بنویسید...">
    <button type="button" class="btn btn-p" onclick="sendSupport()">ارسال</button>
     </div>
     <div id="supStatus" style="font-size:11.5px;color:#34d399;margin-top:4px"></div>
@@ -1542,131 +1677,307 @@ body{background:radial-gradient(circle at 15% 15%,rgba(16,185,129,0.16),transpar
    </div>
  </div>
  <div class="card" style="margin-bottom:16px">
-   <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px">
-  <h2 style="font-size:15px">💰 قیمت لحظه‌ای ارزها و رمزارزها (کلیک برای نمودار)</h2>
-  <input id="searchBox" class="input" style="max-width:240px;margin-top:0" placeholder="🔍 جستجو (دلار، ترون، TON...)" oninput="renderCards()">
+   <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+    <h2 style="font-size:15px">💰 تابلوی زنده بازار ارز و کریپتو</h2>
+    <div class="chip-row" style="margin-top:0">
+   <button type="button" id="catAll" class="chip active" onclick="setCatFilter('all')">همه بازارها</button>
+   <button type="button" id="catFiat" class="chip" onclick="setCatFilter('fiat')">💵 ارز دولتی/فیات</button>
+   <button type="button" id="catCrypto" class="chip" onclick="setCatFilter('crypto')">💎 رمزارزها</button>
+    </div>
+  </div>
+  <input id="searchBox" class="input" style="max-width:250px;margin-top:0" placeholder="🔍 جستجوی نام یا نماد ارز (USD, TRX...)" oninput="renderCards()">
    </div>
    <div id="ratesGrid" class="grid-cards"></div>
  </div>
  <div class="card">
-   <h2 style="font-size:14.5px;color:#38bdf8;margin-bottom:6px">👨‍💻 سازنده ربات و ولت‌های رسمی حمایت (Donate)</h2>
-   <p style="font-size:12px;color:var(--muted)">گیت‌هاب: <a href="__GITHUB__" target="_blank" style="color:#34d399" class="mono">__GITHUB__</a></p>
+   <h2 style="font-size:14.5px;color:#38bdf8;margin-bottom:6px">👨‍💻 توسعه‌دهنده و ولت‌های رسمی حمایت (Donate)</h2>
+   <p style="font-size:12px;color:var(--muted)">گیت‌هاب پروژه: <a href="__GITHUB__" target="_blank" style="color:#34d399" class="mono">__GITHUB__</a></p>
    <div class="wbox" dir="ltr"><span><b style="color:#38bdf8">TON:</b> <span class="mono">__TON__</span></span><button type="button" class="btn" style="padding:4px 9px;font-size:11px" onclick="navigator.clipboard.writeText('__TON__')">Copy</button></div>
    <div class="wbox" dir="ltr"><span><b style="color:#fb7185">TRON:</b> <span class="mono">__TRON__</span></span><button type="button" class="btn" style="padding:4px 9px;font-size:11px" onclick="navigator.clipboard.writeText('__TRON__')">Copy</button></div>
  </div>
   </div>
+  <!-- ================= OWNER WEB ADMIN CONSOLE (/admin) ================= -->
   <div id="viewAdmin" class="__ADMIN_HIDDEN__">
- <div id="adminLoginCard" class="card hidden" style="max-width:440px;margin:20px auto">
-   <h2 style="font-size:17px;color:#fb7185;margin-bottom:6px">🔐 ورود به وب‌پنل مدیریت مالک</h2>
-   <label style="font-size:11.5px;color:var(--muted)">نام کاربری (Username):</label>
-   <input id="loginUser" class="input mono" value="__ADMIN_USER__">
-   <div style="margin-top:10px"><label style="font-size:11.5px;color:var(--muted)">رمز عبور (Password):</label><input id="loginPass" type="text" class="input mono" value="__ADMIN_PASS__"></div>
-   <div id="loginErr" style="color:#fb7185;font-size:12px;margin:8px 0"></div>
-   <button type="button" class="btn btn-d" style="width:100%;justify-content:center;padding:11px;margin-top:6px" onclick="doAdminLogin()">ورود به کنسول مدیریت مالک</button>
- </div>
- <div id="adminDashContent">
-   <div class="grid-2">
-  <div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-   <h2 style="font-size:15px;color:#34d399">👑 وضعیت ربات، سرور و اطلاعات مالک</h2>
-   <span class="up">فعال (Online)</span>
-    </div>
-    <div style="font-size:12.5px;line-height:1.95">
-   <div>🤖 یوزرنیم ربات تلگرام: <b id="statBotUser" class="mono" style="color:#38bdf8">@__BOT_USER__</b></div>
-   <div>👥 کاربران ثبت‌شده ربات: <b id="statUsers" class="mono" style="color:#34d399">1</b></div>
-   <div>🌐 دامنه / ساب‌دامنه دائمی: <b id="statCustomDomain" class="mono" style="color:#34d399">__CUSTOM_DOMAIN__</b></div>
-   <div>🔒 آدرس HTTPS وب‌پنل و مینی‌اپ: <b id="statTunnel" class="mono" style="color:#f59e0b">-</b></div>
-   <div>🖥 آدرس مستقیم آی‌پی سرور: <b id="statIp" class="mono" style="color:#60a5fa">-</b></div>
-   <div>👤 نام کاربری ادمین: <b class="mono" style="color:#34d399">__ADMIN_USER__</b> | 🔑 رمز: <b class="mono" style="color:#fbbf24">__ADMIN_PASS__</b></div>
-   <div>🛠 دستور مدیریت در ترمینال سرور: <code class="mono" style="color:#fb7185">sudo arz</code></div>
-    </div>
-  </div>
-  <div class="card" style="border-color:rgba(16,185,129,0.45)">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-   <h2 style="font-size:15px;color:#34d399">🔒 ست کردن دائمی دامنه / ساب‌دامنه / آی‌پی و SSL</h2>
-   <span id="sslModeBadge" class="up mono">SSL Active (443)</span>
-    </div>
-    <p style="font-size:11.5px;color:var(--muted);margin-bottom:8px">دامنه، ساب‌دامنه (مثلاً <span class="mono">sub.domain.com</span>) یا آی‌پی سرور را وارد کنید تا به صورت دائمی ست بماند و گواهی SSL روی پورت 443 فعال شود:</p>
-    <div style="display:grid;grid-template-columns:1.3fr 1fr;gap:8px">
+ <!-- Security Login Gate for Owner -->
+ <div id="adminLoginCard" class="login-shell __LOGIN_CARD_HIDDEN__">
+   <div style="text-align:center;margin-bottom:16px">
+  <div style="width:56px;height:56px;border-radius:16px;background:linear-gradient(135deg,#e11d48,#f43f5e);display:inline-flex;align-items:center;justify-content:center;font-size:26px;box-shadow:0 10px 25px rgba(244,63,94,0.35);margin-bottom:10px">👑</div>
+  <h2 style="font-size:18px;font-weight:800;color:#fff">ورود به وب‌پنل مدیریت فوق‌حرفه‌ای مالک</h2>
+  <p style="font-size:12px;color:var(--muted);margin-top:4px">نام کاربری و رمز عبوری که ربات تلگرام به شما داده است را وارد نمایید:</p>
+   </div>
    <div>
-     <label style="font-size:11px;color:var(--muted)">دامنه / ساب‌دامنه یا آی‌پی:</label>
-     <input id="sslHostInput" class="input mono" placeholder="bot.yourdomain.com" value="__CUSTOM_DOMAIN_VAL__">
+  <label style="font-size:12px;color:#cbd5e1;font-weight:700">👤 نام کاربری مدیریت (Username):</label>
+  <input id="loginUser" class="input mono" placeholder="admin" autocomplete="username">
+   </div>
+   <div style="margin-top:12px">
+  <div style="display:flex;justify-content:space-between;align-items:center">
+    <label style="font-size:12px;color:#cbd5e1;font-weight:700">🔑 رمز عبور مدیریت (Password):</label>
+    <button type="button" style="background:none;border:none;color:#38bdf8;font-size:11px;cursor:pointer" onclick="togglePassVis()">👁 نمایش/مخفی کردن رمز</button>
+  </div>
+  <input id="loginPass" type="password" class="input mono" placeholder="••••••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')doAdminLogin()">
+   </div>
+   <div id="loginErr" style="color:#fb7185;font-size:12px;margin-top:10px;min-height:18px"></div>
+   <button type="button" id="btnLoginSubmit" class="btn btn-d" style="width:100%;justify-content:center;padding:12px;font-size:13.5px;margin-top:6px" onclick="doAdminLogin()">🔐 ورود به کنسول مدیریت مالک</button>
+   <div style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(148,163,184,0.15);font-size:11.5px;color:var(--muted);text-align:center">
+  💡 نام کاربری و رمز عبور در ربات با زدن دکمه <b>«👑 پنل مدیریت مالک»</b> یا دستور <code class="mono" style="color:#34d399">/admin</code> نمایش داده می‌شود.
+   </div>
+ </div>
+ <!-- Unlocked Pro Owner Dashboard -->
+ <div id="adminDashContent" class="__DASH_CONTENT_HIDDEN__">
+   <div class="grid-4">
+  <div class="kpi-card">
+    <div style="font-size:11.5px;color:var(--muted)">👥 کل کاربران فعال ربات</div>
+    <div id="statUsers" class="mono" style="font-size:22px;font-weight:800;color:#34d399;margin-top:4px">1</div>
+    <div style="font-size:11px;color:#64748b;margin-top:2px">ربات: <span id="statBotUser" class="mono" style="color:#38bdf8">@__BOT_USER__</span></div>
+  </div>
+  <div class="kpi-card">
+    <div style="font-size:11.5px;color:var(--muted)">🌐 دامنه / ساب‌دامنه / آی‌پی ثبت‌شده</div>
+    <div id="statCustomDomain" class="mono" style="font-size:14.5px;font-weight:800;color:#38bdf8;margin-top:6px;word-break:break-all">__CUSTOM_DOMAIN__</div>
+    <div style="font-size:11px;color:#34d399;margin-top:3px">ثبت دائمی در کانفیگ سرور</div>
+  </div>
+  <div class="kpi-card">
+    <div style="font-size:11.5px;color:var(--muted)">🔒 وضعیت گواهی SSL پورت 443</div>
+    <div id="sslModeBadge" class="mono" style="font-size:13.5px;font-weight:800;color:#fbbf24;margin-top:6px">SSL Active (443)</div>
+    <div id="statTunnel" class="mono" style="font-size:10.5px;color:#94a3b8;margin-top:3px;word-break:break-all">-</div>
+  </div>
+  <div class="kpi-card">
+    <div style="font-size:11.5px;color:var(--muted)">🔐 اطلاعات ورود مالک به وب‌پنل</div>
+    <div style="font-size:12.5px;margin-top:6px">کاربر: <b id="dispAdminUser" class="mono" style="color:#34d399">__ADMIN_USER__</b></div>
+    <div style="font-size:12.5px;margin-top:2px">رمز: <b id="dispAdminPass" class="mono" style="color:#fbbf24">__ADMIN_PASS__</b></div>
+  </div>
+   </div>
+   <div class="grid-2">
+  <div class="card" style="border-color:rgba(16,185,129,0.45);background:linear-gradient(145deg,rgba(15,23,42,0.96),rgba(6,78,59,0.18))">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:8px">
+   <h2 style="font-size:15px;color:#34d399">🔒 ثبت دائمی دامنه، ساب‌دامنه یا آی‌پی + صدور گواهی SSL</h2>
+   <span class="up mono" style="font-size:11px">Port 443 HTTPS</span>
+    </div>
+    <p style="font-size:11.5px;color:var(--muted);margin-bottom:8px;line-height:1.6">هر <b>دامنه</b>، <b>ساب‌دامنه</b> (مثل <span class="mono">sub.domain.com</span>) یا حتی <b>آی‌پی سرور</b> را وارد کنید تا گواهی SSL صادر شود و همان آدرس به صورت دائمی روی ربات و وب‌پنل ثبت بماند:</p>
+    <div class="chip-row" style="margin-bottom:8px">
+   <button type="button" class="chip" onclick="fillHostIp()">🖥 قرار دادن آی‌پی سرور (<span id="chipServerIp" class="mono">__SERVER_IP__</span>)</button>
+   <button type="button" class="chip" onclick="fillSavedDom()">🌐 قرار دادن دامنه/ساب‌دامنه فعلی</button>
+    </div>
+    <div style="display:grid;grid-template-columns:1.35fr 1fr;gap:8px">
+   <div>
+     <label style="font-size:11px;color:var(--muted)">دامنه، ساب‌دامنه یا آی‌پی سرور:</label>
+     <input id="sslHostInput" class="input mono" placeholder="sub.yourdomain.com یا IP" value="__CUSTOM_DOMAIN_VAL__">
    </div>
    <div>
      <label style="font-size:11px;color:var(--muted)">ایمیل Let's Encrypt (اختیاری):</label>
      <input id="sslEmailInput" class="input mono" placeholder="admin@yourdomain.com">
    </div>
     </div>
-    <button type="button" id="btnSaveSsl" class="btn btn-s" style="width:100%;justify-content:center;margin-top:10px;padding:10px" onclick="saveSslDomain()">🔒 ثبت دائمی دامنه/ساب‌دامنه و صدور خودکار SSL</button>
-    <div id="sslStatusMsg" style="font-size:11.5px;color:#34d399;margin-top:7px;line-height:1.6"></div>
+    <button type="button" id="btnSaveSsl" class="btn btn-s" style="width:100%;justify-content:center;margin-top:10px;padding:11px" onclick="saveSslDomain()">🔒 دریافت گواهی SSL و ثبت دائمی دامنه / ساب‌دامنه / آی‌پی</button>
+    <div id="sslStatusMsg" style="font-size:11.5px;color:#34d399;margin-top:8px;line-height:1.65"></div>
   </div>
-   </div>
-   <div class="grid-2">
-  <div class="card">
-    <h2 style="font-size:15px;color:#60a5fa;margin-bottom:10px">✏️ ویرایش نرخ ارز یا همگام‌سازی با ArzDigital</h2>
+  <div class="card" style="border-color:rgba(59,130,246,0.35)">
+    <h2 style="font-size:15px;color:#60a5fa;margin-bottom:10px">✏️ مدیریت نرخ ارزها و همگام‌سازی زنده با ArzDigital</h2>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
    <div><label style="font-size:11.5px;color:var(--muted)">انتخاب ارز:</label><select id="editCode" onchange="fillEditInputs()"></select></div>
    <div><label style="font-size:11.5px;color:var(--muted)">نرخ تومانی (IRT):</label><input id="editToman" type="number" step="any" class="input mono"></div>
     </div>
-    <div style="margin-top:8px"><label style="font-size:11.5px;color:var(--muted)">نرخ دلاری (USD):</label><input id="editUsd" type="number" step="any" class="input mono"></div>
+    <div style="margin-top:8px"><label style="font-size:11.5px;color:var(--muted)">نرخ دلاری جهانی (USD):</label><input id="editUsd" type="number" step="any" class="input mono"></div>
     <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
-   <button type="button" class="btn btn-s" style="flex:1;justify-content:center" onclick="saveRateOverride()">💾 ذخیره نرخ دستی</button>
+   <button type="button" class="btn btn-s" style="flex:1;justify-content:center" onclick="saveRateOverride()">💾 ثبت نرخ سفارشی</button>
    <button type="button" class="btn btn-p" onclick="resetRateOverrides()">🔄 دریافت زنده از ArzDigital</button>
     </div>
     <div id="editStatus" style="font-size:11.5px;color:#34d399;margin-top:6px"></div>
   </div>
-  <div class="card">
-    <h2 style="font-size:15px;color:#34d399;margin-bottom:8px">📡 ارسال تابلوی نرخ ارز به کانال یا گروه تلگرام</h2>
-    <p style="font-size:11.5px;color:var(--muted);margin-bottom:8px">ابتدا با دکمه‌های بالا ربات را در کانال یا گروه ادمین کنید، سپس یوزرنیم کانال (مثلاً <span class="mono">@mychannel</span>) یا آیدی عددی گروه را وارد کنید:</p>
-    <div style="display:flex;gap:8px">
-   <input id="targetChatInput" class="input mono" style="margin-top:0" placeholder="@mychannel یا -100123456789">
-   <button type="button" class="btn btn-s" onclick="sendBoardToChat()">📊 ارسال تابلو</button>
-    </div>
-    <div id="targetChatStatus" style="font-size:11.5px;color:#34d399;margin-top:6px"></div>
-  </div>
    </div>
    <div class="grid-2">
   <div class="card">
-    <h2 style="font-size:15px;color:#fb7185;margin-bottom:8px">📢 ارسال پیام همگانی به تمام کاربران ربات (Broadcast)</h2>
-    <textarea id="bcText" rows="2" placeholder="متن اطلاعیه یا پیام همگانی خود را بنویسید..."></textarea>
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px">
-   <span id="bcStatus" style="font-size:12px;color:#34d399"></span>
-   <button type="button" class="btn btn-d" onclick="sendBroadcast()">🚀 ارسال به تمام کاربران</button>
+    <h2 style="font-size:15px;color:#34d399;margin-bottom:8px">📡 ارسال تابلوی نرخ به کانال/گروه و پیام همگانی</h2>
+    <label style="font-size:11.5px;color:var(--muted)">ارسال فوری تابلوی کامل نرخ ارز به کانال یا گروه تلگرام:</label>
+    <div style="display:flex;gap:8px;margin-top:5px">
+   <input id="targetChatInput" class="input mono" style="margin-top:0" placeholder="@mychannel یا -100123456789">
+   <button type="button" class="btn btn-s" onclick="sendBoardToChat()">📊 ارسال تابلو</button>
+    </div>
+    <div id="targetChatStatus" style="font-size:11.5px;color:#34d399;margin-top:5px"></div>
+    <div style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(148,163,184,0.16)">
+   <label style="font-size:11.5px;color:#fb7185;font-weight:700">📢 ارسال پیام همگانی به تمام کاربران ربات (Broadcast):</label>
+   <textarea id="bcText" rows="2" placeholder="متن اطلاعیه یا پیام همگانی خود را بنویسید..."></textarea>
+   <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px">
+     <span id="bcStatus" style="font-size:12px;color:#34d399"></span>
+     <button type="button" class="btn btn-d" onclick="sendBroadcast()">🚀 ارسال همگانی</button>
+   </div>
     </div>
   </div>
   <div class="card">
-    <h2 style="font-size:15px;color:#38bdf8;margin-bottom:10px">🛟 صندوق تیکت‌های پشتیبانی کاربران (پاسخ مستقیم به تلگرام)</h2>
-    <div id="ticketsContainer" style="font-size:12.5px;color:var(--muted)">هنوز پیام پشتیبانی ثبت نشده است.</div>
+    <h2 style="font-size:15px;color:#f59e0b;margin-bottom:8px">🔑 تغییر نام کاربری و رمز عبور وب‌پنل مدیریت</h2>
+    <p style="font-size:11.5px;color:var(--muted);margin-bottom:8px">می‌توانید نام کاربری و رمز عبور ورود به وب‌پنل مالک را تغییر دهید تا در فایل <span class="mono">.env</span> سرور هم ذخیره شود:</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+   <div><label style="font-size:11px;color:var(--muted)">نام کاربری جدید:</label><input id="newAdminUser" class="input mono" value="__ADMIN_USER__"></div>
+   <div><label style="font-size:11px;color:var(--muted)">رمز عبور جدید:</label><input id="newAdminPass" class="input mono" value="__ADMIN_PASS__"></div>
+    </div>
+    <button type="button" class="btn btn-w" style="width:100%;justify-content:center;margin-top:10px" onclick="saveNewCredentials()">💾 ذخیره نام کاربری و رمز جدید مالک</button>
+    <div id="credStatus" style="font-size:11.5px;color:#34d399;margin-top:6px"></div>
+    <div style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(148,163,184,0.16)">
+   <h3 style="font-size:13.5px;color:#38bdf8;margin-bottom:8px">🛟 تیکت‌های پشتیبانی کاربران (پاسخ مستقیم به تلگرام)</h3>
+   <div id="ticketsContainer" style="font-size:12px;color:var(--muted);max-height:190px;overflow-y:auto">هنوز پیام پشتیبانی ثبت نشده است.</div>
+    </div>
   </div>
    </div>
  </div>
   </div>
 </div>
 <script>
-let RATES=__INITIAL_RATES_JSON__,selectedChartCode='USD',BOT_USER='__BOT_USER__',OWNER_ID='__OWNER_ID__',IS_OWNER_SESSION=__IS_OWNER_BOOL__;
-const EXPECTED_USER="__ADMIN_USER__",EXPECTED_PASS="__ADMIN_PASS__";
-function detectOwnerAccess(){
+let RATES=__INITIAL_RATES_JSON__,selectedChartCode='USD',catFilter='all',BOT_USER='__BOT_USER__',OWNER_ID='__OWNER_ID__',SERVER_IP='__SERVER_IP__',SAVED_DOM='__CUSTOM_DOMAIN_VAL__';
+let EXPECTED_USER="__ADMIN_USER__",EXPECTED_PASS="__ADMIN_PASS__";
+let IS_ADMIN_ROUTE=__IS_ADMIN_ROUTE_BOOL__,IS_OWNER_AUTH=__IS_AUTO_AUTH_BOOL__;
+function initSession(){
   const p=new URLSearchParams(window.location.search);
-  if(window.location.pathname.includes('/admin')||p.get('autologin')==='1'||p.get('u')===EXPECTED_USER){
- IS_OWNER_SESSION=true;
-  }
-  if(p.get('owner_id')&&OWNER_ID&&OWNER_ID!=='0'&&p.get('owner_id')===String(OWNER_ID)){
- IS_OWNER_SESSION=true;
+  if(p.get('autologin')==='1'||(p.get('owner_id')&&OWNER_ID&&OWNER_ID!=='0'&&p.get('owner_id')===String(OWNER_ID))){
+ IS_OWNER_AUTH=true;
+ try{sessionStorage.setItem('arz_owner_auth','1');sessionStorage.setItem('arz_u',EXPECTED_USER);sessionStorage.setItem('arz_p',EXPECTED_PASS);}catch(e){}
   }
   try{
+ if(sessionStorage.getItem('arz_owner_auth')==='1'){
+   IS_OWNER_AUTH=true;
+   if(sessionStorage.getItem('arz_u'))EXPECTED_USER=sessionStorage.getItem('arz_u');
+   if(sessionStorage.getItem('arz_p'))EXPECTED_PASS=sessionStorage.getItem('arz_p');
+ }
  const tgUser=window.Telegram&&window.Telegram.WebApp&&window.Telegram.WebApp.initDataUnsafe&&window.Telegram.WebApp.initDataUnsafe.user;
  if(tgUser&&tgUser.id&&OWNER_ID&&OWNER_ID!=='0'&&String(tgUser.id)===String(OWNER_ID)){
-   IS_OWNER_SESSION=true;
+   IS_OWNER_AUTH=true;
  }
   }catch(e){}
+  syncUiState();
+}
+function syncUiState(){
   const adminBtn=document.getElementById('tabAdminBtn');
-  if(adminBtn){
- adminBtn.classList.toggle('hidden',!IS_OWNER_SESSION);
-  }
-  if(!IS_OWNER_SESSION){
+  const miniBtn=document.getElementById('tabMiniBtn');
+  const lockBtn=document.getElementById('btnLockAdmin');
+  if(!IS_ADMIN_ROUTE&&!IS_OWNER_AUTH){
+ if(adminBtn)adminBtn.classList.add('hidden');
+ if(miniBtn)miniBtn.classList.add('hidden');
+ if(lockBtn)lockBtn.classList.add('hidden');
  document.getElementById('viewAdmin').classList.add('hidden');
  document.getElementById('viewMiniApp').classList.remove('hidden');
+ return;
   }
+  if(adminBtn)adminBtn.classList.remove('hidden');
+  if(miniBtn)miniBtn.classList.remove('hidden');
+  if(IS_ADMIN_ROUTE){
+ document.getElementById('viewMiniApp').classList.add('hidden');
+ document.getElementById('viewAdmin').classList.remove('hidden');
+ if(IS_OWNER_AUTH){
+   document.getElementById('adminLoginCard').classList.add('hidden');
+   document.getElementById('adminDashContent').classList.remove('hidden');
+   if(lockBtn)lockBtn.classList.remove('hidden');
+ }else{
+   document.getElementById('adminLoginCard').classList.remove('hidden');
+   document.getElementById('adminDashContent').classList.add('hidden');
+   if(lockBtn)lockBtn.classList.add('hidden');
+ }
+  }else{
+ document.getElementById('viewAdmin').classList.add('hidden');
+ document.getElementById('viewMiniApp').classList.remove('hidden');
+ if(lockBtn)lockBtn.classList.toggle('hidden',!IS_OWNER_AUTH);
+  }
+}
+function switchView(v){
+  if(v==='admin'){
+ IS_ADMIN_ROUTE=true;
+ syncUiState();
+  }else{
+ IS_ADMIN_ROUTE=false;
+ syncUiState();
+  }
+}
+function lockAdminSession(){
+  IS_OWNER_AUTH=false;
+  IS_ADMIN_ROUTE=true;
+  try{sessionStorage.removeItem('arz_owner_auth');}catch(e){}
+  const lu=document.getElementById('loginUser'),lp=document.getElementById('loginPass'),le=document.getElementById('loginErr');
+  if(lu)lu.value='';
+  if(lp)lp.value='';
+  if(le)le.innerText='';
+  syncUiState();
+}
+function togglePassVis(){
+  const lp=document.getElementById('loginPass');
+  if(lp)lp.type=(lp.type==='password')?'text':'password';
+}
+async function doAdminLogin(){
+  const u=(document.getElementById('loginUser').value||'').trim();
+  const p=(document.getElementById('loginPass').value||'').trim();
+  const errEl=document.getElementById('loginErr');
+  const btn=document.getElementById('btnLoginSubmit');
+  if(!u||!p){errEl.innerText='❌ لطفاً نام کاربری و رمز عبور ربات را وارد کنید.';return;}
+  btn.disabled=true;btn.innerText='⏳ در حال بررسی اطلاعات امنیتی مالک...';
+  try{
+ const r=await fetch('/api/admin/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
+ const d=await r.json();
+ if(r.ok&&d.ok){
+   EXPECTED_USER=u;EXPECTED_PASS=p;
+   IS_OWNER_AUTH=true;IS_ADMIN_ROUTE=true;
+   try{sessionStorage.setItem('arz_owner_auth','1');sessionStorage.setItem('arz_u',u);sessionStorage.setItem('arz_p',p);}catch(e){}
+   errEl.innerText='';
+   syncUiState();
+   await loadData(false);
+ }else{
+   errEl.innerText='❌ '+(d.error||'نام کاربری یا رمز عبور اشتباه است!');
+ }
+  }catch(e){
+ if(u===EXPECTED_USER&&p===EXPECTED_PASS){
+   IS_OWNER_AUTH=true;IS_ADMIN_ROUTE=true;
+   syncUiState();
+ }else{
+   errEl.innerText='❌ نام کاربری یا رمز عبور اشتباه است!';
+ }
+  }
+  btn.disabled=false;btn.innerText='🔐 ورود به کنسول مدیریت مالک';
+}
+async function saveNewCredentials(){
+  const nu=(document.getElementById('newAdminUser').value||'').trim();
+  const np=(document.getElementById('newAdminPass').value||'').trim();
+  const st=document.getElementById('credStatus');
+  if(!nu||!np){st.style.color='#fb7185';st.innerText='❌ نام کاربری و رمز نمی‌توانند خالی باشند.';return;}
+  const r=await fetch('/api/admin/credentials',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:EXPECTED_USER,password:EXPECTED_PASS,newUsername:nu,newPassword:np})});
+  const d=await r.json();
+  if(d.ok){
+ EXPECTED_USER=nu;EXPECTED_PASS=np;
+ try{sessionStorage.setItem('arz_u',nu);sessionStorage.setItem('arz_p',np);}catch(e){}
+ document.getElementById('dispAdminUser').innerText=nu;
+ document.getElementById('dispAdminPass').innerText=np;
+ st.style.color='#34d399';st.innerText='✅ نام کاربری و رمز عبور جدید مالک با موفقیت ذخیره شد!';
+  }else{
+ st.style.color='#fb7185';st.innerText='❌ خطا در ذخیره رمز جدید.';
+  }
+}
+function fillHostIp(){
+  const inp=document.getElementById('sslHostInput');
+  if(inp)inp.value=SERVER_IP||window.location.hostname;
+}
+function fillSavedDom(){
+  const inp=document.getElementById('sslHostInput');
+  if(inp)inp.value=SAVED_DOM||SERVER_IP||window.location.hostname;
+}
+async function saveSslDomain(){
+  const hostEl=document.getElementById('sslHostInput'),emailEl=document.getElementById('sslEmailInput'),btn=document.getElementById('btnSaveSsl'),st=document.getElementById('sslStatusMsg');
+  const host=(hostEl.value||'').trim(),email=(emailEl.value||'').trim();
+  if(!host){st.style.color='#fb7185';st.innerText='❌ لطفاً دامنه، ساب‌دامنه یا آی‌پی سرور را وارد کنید.';return;}
+  btn.disabled=true;btn.innerText='⏳ در حال صدور گواهی SSL و ثبت دائمی '+host+' روی پورت 443...';
+  st.style.color='#fbbf24';st.innerText='⏳ در حال تنظیم Nginx و دریافت گواهی SSL برای '+host+'... لطفاً چند ثانیه صبر کنید.';
+  try{
+ const r=await fetch('/api/admin/ssl',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:EXPECTED_USER,password:EXPECTED_PASS,host,email})});
+ const d=await r.json();
+ if(d.ok){
+   SAVED_DOM=d.host;
+   hostEl.value=d.host;
+   document.getElementById('statCustomDomain').innerText=d.host+' (ثبت دائم + SSL)';
+   document.getElementById('statTunnel').innerText=d.httpsUrl+'/admin';
+   document.getElementById('sslModeBadge').innerText=d.mode||'SSL Active (443)';
+   st.style.color='#34d399';
+   st.innerHTML='✅ گواهی SSL صادر شد و آدرس <b>'+d.host+'</b> به صورت دائمی ثبت گردید!<br>👑 وب‌پنل مدیریت مالک: <a href="'+d.httpsUrl+'/admin" target="_blank" style="color:#38bdf8" class="mono">'+d.httpsUrl+'/admin</a><br>🚀 مینی‌اپ کاربران عادی: <a href="'+d.httpsUrl+'/miniapp" target="_blank" style="color:#34d399" class="mono">'+d.httpsUrl+'/miniapp</a>';
+ }else{
+   st.style.color='#fb7185';st.innerText='❌ خطا: '+(d.error||'نامعتبر');
+ }
+  }catch(e){
+ st.style.color='#fb7185';st.innerText='❌ خطا در ارتباط با سرور.';
+  }
+  btn.disabled=false;btn.innerText='🔒 دریافت گواهی SSL و ثبت دائمی دامنه / ساب‌دامنه / آی‌پی';
 }
 function updateBotLinks(){
   const g=document.getElementById('btnAddGroup'),c=document.getElementById('btnAddChannel');
@@ -1690,58 +2001,34 @@ function addBotToGroup(ev){
 function addBotToChannel(ev){
   return openTgLink('https://t.me/'+BOT_USER+'?startchannel=true&admin=post_messages+edit_messages+delete_messages','tg://resolve?domain='+BOT_USER+'&startchannel&admin=post_messages+edit_messages+delete_messages',ev);
 }
-function switchView(v){
-  if(v==='admin'&&!IS_OWNER_SESSION)return;
-  document.getElementById('viewMiniApp').classList.toggle('hidden',v!=='miniapp');
-  document.getElementById('viewAdmin').classList.toggle('hidden',v!=='admin');
-  if(v==='admin'){
- document.getElementById('adminLoginCard').classList.add('hidden');
- document.getElementById('adminDashContent').classList.remove('hidden');
-  }
+function renderTicker(){
+  const bar=document.getElementById('liveTickerBar');
+  if(!bar||!RATES||!RATES.length)return;
+  bar.innerHTML=RATES.slice(0,10).map(x=>{
+ const up=x.change>=0,s=up?'+':'';
+ return '<div class="ticker-item" data-code="'+x.code+'" onclick="drawChart(this.dataset.code)"><b class="mono" style="color:#f8fafc">'+x.code+'</b><span class="mono" style="color:#cbd5e1">'+Math.round(x.toman).toLocaleString('en-US')+' T</span><span class="mono" style="color:'+(up?'#34d399':'#fb7185')+';font-weight:700">'+s+x.change.toFixed(2)+'%</span></div>';
+  }).join('');
 }
-function checkAutoLogin(){
-  detectOwnerAccess();
-  const p=new URLSearchParams(window.location.search);
-  if(IS_OWNER_SESSION&&(window.location.pathname.includes('/admin')||p.get('autologin')==='1'||p.get('u')===EXPECTED_USER)){
- switchView('admin');
-  }
+function setConvPreset(v){
+  const el=document.getElementById('convAmt');
+  if(el){el.value=v;runConvert();}
 }
-function doAdminLogin(){
-  const u=document.getElementById('loginUser').value.trim(),p=document.getElementById('loginPass').value.trim();
-  if(u===EXPECTED_USER&&p===EXPECTED_PASS){
- IS_OWNER_SESSION=true;
- document.getElementById('tabAdminBtn').classList.remove('hidden');
- document.getElementById('adminLoginCard').classList.add('hidden');
- document.getElementById('adminDashContent').classList.remove('hidden');
-  }else document.getElementById('loginErr').innerText='❌ نام کاربری یا رمز عبور اشتباه است!';
+function swapConvertAssets(){
+  const s1=document.getElementById('convFrom'),s2=document.getElementById('convTo');
+  if(!s1||!s2)return;
+  const tmp=s1.value;s1.value=s2.value;s2.value=tmp;
+  runConvert();
 }
-async function saveSslDomain(){
-  const hostEl=document.getElementById('sslHostInput'),emailEl=document.getElementById('sslEmailInput'),btn=document.getElementById('btnSaveSsl'),st=document.getElementById('sslStatusMsg');
-  const host=(hostEl.value||'').trim(),email=(emailEl.value||'').trim();
-  if(!host){st.style.color='#fb7185';st.innerText='❌ لطفاً دامنه، ساب‌دامنه یا آی‌پی را وارد کنید.';return;}
-  btn.disabled=true;btn.innerText='⏳ در حال ثبت دائمی دامنه و صدور گواهی SSL روی پورت 443...';
-  st.style.color='#fbbf24';st.innerText='⏳ در حال کانفیگ Nginx و دریافت گواهی SSL (Let’s Encrypt / OpenSSL)... لطفاً چند ثانیه صبر کنید.';
-  try{
- const r=await fetch('/api/admin/ssl',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:EXPECTED_USER,password:EXPECTED_PASS,host,email})});
- const d=await r.json();
- if(d.ok){
-   hostEl.value=d.host;
-   document.getElementById('statCustomDomain').innerText=d.host+' (ثبت دائم + SSL)';
-   document.getElementById('statTunnel').innerText=d.httpsUrl+'/admin?autologin=1';
-   document.getElementById('sslModeBadge').innerText=d.mode||'SSL Active (443)';
-   st.style.color='#34d399';
-   st.innerHTML='✅ دامنه/ساب‌دامنه <b>'+d.host+'</b> به صورت دائمی ذخیره شد و SSL فعال گردید!<br>🔒 وب‌پنل مالک: <a href="'+d.httpsUrl+'/admin?autologin=1" target="_blank" style="color:#38bdf8" class="mono">'+d.httpsUrl+'/admin?autologin=1</a><br>🚀 مینی‌اپ کاربران: <a href="'+d.httpsUrl+'/miniapp" target="_blank" style="color:#34d399" class="mono">'+d.httpsUrl+'/miniapp</a>';
- }else{
-   st.style.color='#fb7185';st.innerText='❌ خطا: '+(d.error||'نامعتبر');
- }
-  }catch(e){
- st.style.color='#fb7185';st.innerText='❌ خطا در ارتباط با سرور.';
-  }
-  btn.disabled=false;btn.innerText='🔒 ثبت دائمی دامنه/ساب‌دامنه و صدور خودکار SSL';
+function setCatFilter(c){
+  catFilter=c;
+  document.getElementById('catAll').classList.toggle('active',c==='all');
+  document.getElementById('catFiat').classList.toggle('active',c==='fiat');
+  document.getElementById('catCrypto').classList.toggle('active',c==='crypto');
+  renderCards();
 }
 function renderInitial(){
   if(RATES&&RATES.length){
- populateSelects();runConvert();renderCards();drawChart(selectedChartCode);
+ renderTicker();populateSelects();runConvert();renderCards();drawChart(selectedChartCode);
   }
   updateBotLinks();
 }
@@ -1749,7 +2036,11 @@ async function loadData(sync=false){
   try{
  const r=await fetch('/api/rates'+(sync?'?sync=1':'')),d=await r.json();
  if(d.ownerId)OWNER_ID=String(d.ownerId);
- detectOwnerAccess();
+ if(d.serverIp){
+   SERVER_IP=d.serverIp;
+   const chipIp=document.getElementById('chipServerIp');
+   if(chipIp)chipIp.innerText=SERVER_IP;
+ }
  if(d.botUsername){
    BOT_USER=d.botUsername;
    document.getElementById('hdrBotUser').innerText='@'+BOT_USER;
@@ -1757,6 +2048,7 @@ async function loadData(sync=false){
    updateBotLinks();
  }
  if(d.customDomain){
+   SAVED_DOM=d.customDomain;
    document.getElementById('statCustomDomain').innerText=d.customDomain+' (ثبت دائم + SSL)';
    const inp=document.getElementById('sslHostInput');
    if(inp&&!inp.value)inp.value=d.customDomain;
@@ -1767,16 +2059,15 @@ async function loadData(sync=false){
  if(d.rates){
    RATES=d.rates;
    document.getElementById('statUsers').innerText=d.usersCount||1;
-   document.getElementById('statIp').innerText='http://'+(d.serverIp||window.location.hostname)+'/admin?autologin=1';
-   document.getElementById('statTunnel').innerText=d.tunnelUrl?(d.tunnelUrl+'/admin?autologin=1'):window.location.origin;
-   populateSelects();runConvert();renderCards();drawChart(selectedChartCode);renderTickets(d.tickets||[]);
+   document.getElementById('statTunnel').innerText=d.tunnelUrl?(d.tunnelUrl+'/admin'):window.location.origin;
+   renderTicker();populateSelects();runConvert();renderCards();drawChart(selectedChartCode);renderTickets(d.tickets||[]);
  }
   }catch(e){}
 }
 function renderTickets(list){
   const el=document.getElementById('ticketsContainer');
   if(!list||!list.length){el.innerHTML='<p style="color:#94a3b8">هنوز پیام پشتیبانی ثبت نشده است.</p>';return;}
-  el.innerHTML=list.map(t=>'<div style="background:#020617;border:1px solid rgba(148,163,184,0.2);border-radius:11px;padding:10px;margin-bottom:8px"><div style="display:flex;justify-content:space-between"><b>'+t.name+' (ID: '+t.user_id+')</b><span style="color:'+(t.reply?'#34d399':'#fbbf24')+'">'+(t.reply?'پاسخ داده شده':'در انتظار پاسخ')+'</span></div><div style="margin:6px 0;color:#f8fafc">'+t.message+'</div>'+(t.reply?'<div style="color:#34d399;font-size:11.5px;margin-bottom:6px">پاسخ شما: '+t.reply+'</div>':'')+'<div style="display:flex;gap:6px"><input id="rep_'+t.id+'" class="input" style="margin-top:0" placeholder="پاسخ به این کاربر..."><button type="button" class="btn btn-s" onclick="replyTicket('+t.id+')">ارسال</button></div></div>').join('');
+  el.innerHTML=list.map(t=>'<div style="background:#020617;border:1px solid rgba(148,163,184,0.2);border-radius:11px;padding:10px;margin-bottom:8px"><div style="display:flex;justify-content:space-between"><b>'+t.name+' (ID: '+t.user_id+')</b><span style="color:'+(t.reply?'#34d399':'#fbbf24')+'">'+(t.reply?'پاسخ داده شده':'در انتظار پاسخ')+'</span></div><div style="margin:6px 0;color:#f8fafc">'+t.message+'</div>'+(t.reply?'<div style="color:#34d399;font-size:11.5px;margin-bottom:6px">پاسخ شما: '+t.reply+'</div>':'')+'<div style="display:flex;gap:6px"><input id="rep_'+t.id+'" class="input" style="margin-top:0" placeholder="پاسخ مستقیم به تلگرام کاربر..."><button type="button" class="btn btn-s" onclick="replyTicket('+t.id+')">ارسال</button></div></div>').join('');
 }
 async function replyTicket(id){
   const inp=document.getElementById('rep_'+id);if(!inp||!inp.value.trim())return;
@@ -1810,22 +2101,26 @@ function runConvert(){
 }
 function renderCards(){
   const q=(document.getElementById('searchBox').value||'').trim().toLowerCase();
-  const filtered=RATES.filter(x=>!q||x.code.toLowerCase().includes(q)||x.name.toLowerCase().includes(q));
+  const filtered=RATES.filter(x=>{
+ if(catFilter!=='all'&&x.type&&x.type!==catFilter)return false;
+ return !q||x.code.toLowerCase().includes(q)||x.name.toLowerCase().includes(q);
+  });
   document.getElementById('ratesGrid').innerHTML=filtered.map(x=>{
  const up=x.change>=0,s=up?'+':'';
- return '<div class="card" style="cursor:pointer;padding:13px" data-code="'+x.code+'" onclick="drawChart(this.dataset.code)"><div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:13.5px">'+x.name+'</b><span class="'+(up?'up':'down')+' mono">'+s+x.change.toFixed(2)+'%</span></div><div style="margin-top:8px;font-size:16px;font-weight:800;color:#34d399" class="mono">'+Math.round(x.toman).toLocaleString('en-US')+' <span style="font-size:11.5px">تومان</span></div><div style="font-size:11.5px;color:#94a3b8;margin-top:2px" class="mono">$'+x.usd.toLocaleString('en-US',{maximumFractionDigits:4})+' USD</div></div>';
+ return '<div class="card rate-card" style="cursor:pointer;padding:14px" data-code="'+x.code+'" onclick="drawChart(this.dataset.code)"><div style="display:flex;justify-content:space-between;align-items:center"><div><b style="font-size:13.5px;color:#f8fafc">'+x.name+'</b><div class="mono" style="font-size:10.5px;color:#64748b;margin-top:1px">'+x.code+' / IRT</div></div><span class="'+(up?'up':'down')+' mono">'+s+x.change.toFixed(2)+'%</span></div><div style="margin-top:10px;font-size:17px;font-weight:800;color:#34d399" class="mono">'+Math.round(x.toman).toLocaleString('en-US')+' <span style="font-size:11.5px;color:#94a3b8;font-weight:600">تومان</span></div><div style="font-size:11.5px;color:#94a3b8;margin-top:3px" class="mono">$'+x.usd.toLocaleString('en-US',{maximumFractionDigits:4})+' USD</div></div>';
   }).join('');
 }
 function drawChart(code){
   selectedChartCode=code||'USD';
   const item=RATES.find(x=>x.code===selectedChartCode)||RATES[0];
   if(!item)return;
-  document.getElementById('chartTitleCode').innerText=item.code+' ('+Math.round(item.toman).toLocaleString('en-US')+' تومان)';
+  document.getElementById('chartTitleCode').innerText=item.code+' — '+item.name+' ('+Math.round(item.toman).toLocaleString('en-US')+' تومان)';
   const b=document.getElementById('chartChangeBadge'),up=item.change>=0;
   b.className=up?'up mono':'down mono';b.innerText=(up?'+':'')+item.change.toFixed(2)+'%';
-  const pts=up?[95,82,86,65,70,45,28]:[30,48,42,66,60,82,98],stroke=up?'#10b981':'#f43f5e';
+  const pts=up?[102,88,92,68,74,46,26]:[28,46,40,68,62,88,104],stroke=up?'#10b981':'#f43f5e';
   const coords=pts.map((y,i)=>(20+i*60)+','+y).join(' ');
-  document.getElementById('pnlSvg').innerHTML='<polyline fill="none" stroke="'+stroke+'" stroke-width="3.5" points="'+coords+'" />'+pts.map((y,i)=>'<circle cx="'+(20+i*60)+'" cy="'+y+'" r="4.5" fill="'+stroke+'" />').join('');
+  const areaCoords='20,128 '+coords+' 380,128';
+  document.getElementById('pnlSvg').innerHTML='<defs><linearGradient id="cg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="'+stroke+'" stop-opacity="0.32"/><stop offset="100%" stop-color="'+stroke+'" stop-opacity="0.0"/></linearGradient></defs><polygon fill="url(#cg)" points="'+areaCoords+'"/><polyline fill="none" stroke="'+stroke+'" stroke-width="3.2" stroke-linecap="round" points="'+coords+'" />'+pts.map((y,i)=>'<circle cx="'+(20+i*60)+'" cy="'+y+'" r="4.5" fill="#020617" stroke="'+stroke+'" stroke-width="2.5" />').join('');
 }
 function fillEditInputs(){
   const item=RATES.find(x=>x.code===(document.getElementById('editCode').value||'USD'));
@@ -1848,7 +2143,7 @@ async function resetRateOverrides(){
 async function sendSupport(){
   const m=document.getElementById('supInput').value.trim();if(!m)return;
   await fetch('/api/support',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:m})});
-  document.getElementById('supInput').value='';document.getElementById('supStatus').innerText='✅ پیام شما به تلگرام مالک ربات ارسال شد!';
+  document.getElementById('supInput').value='';document.getElementById('supStatus').innerText='✅ پیام شما با موفقیت به پشتیبانی ربات ارسال شد!';
   await loadData(false);
 }
 async function sendBroadcast(){
@@ -1856,25 +2151,26 @@ async function sendBroadcast(){
   const r=await fetch('/api/broadcast',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:EXPECTED_USER,password:EXPECTED_PASS,message:m})});
   const d=await r.json();if(d.ok){document.getElementById('bcText').value='';document.getElementById('bcStatus').innerText='✅ پیام به '+d.sent+' کاربر ارسال شد!';}
 }
-checkAutoLogin();renderInitial();loadData(false);
+initSession();renderInitial();loadData(false);
 </script>
-<script async defer src="https://telegram.org/js/telegram-web-app.js" onload="detectOwnerAccess()"></script>
+<script async defer src="https://telegram.org/js/telegram-web-app.js" onload="initSession()"></script>
 </body>
 </html>"""
 async def handle_page(request):
- is_admin_route = (
-  request.path.startswith("/admin")
-  or request.query.get("autologin") == "1"
+ is_admin_route = request.path.startswith("/admin")
+ is_auto_auth = (
+  request.query.get("autologin") == "1"
   or (bool(OWNER_ID) and request.query.get("owner_id") == str(OWNER_ID))
  )
  if not _BOT_ME_FETCHED and "bot" in request.app:
   asyncio.create_task(get_bot_username(request.app["bot"]))
  bot_user = BOT_USERNAME_CACHE or "ArzPulseBot"
  custom_dom = get_custom_domain()
+ server_ip = detect_server_ip()
  hdr_title = (
-  "ArzPulse Pro — وب‌پنل مدیریت ربات (ویژه مالک)"
+  "ArzPulse Pro — کنسول تحت وب مدیریت مالک"
   if is_admin_route
-  else "ArzPulse Pro — مینی‌اپ زنده نرخ ارز و تبدیل"
+  else "ArzPulse Pro — مینی‌اپ زنده نرخ ارز و رمزارز"
  )
  html = (
   WEB_HTML
@@ -1882,10 +2178,15 @@ async def handle_page(request):
   .replace("__ADMIN_USER__", ADMIN_USERNAME)
   .replace("__ADMIN_PASS__", ADMIN_PASSWORD)
   .replace("__OWNER_ID__", str(OWNER_ID))
-  .replace("__IS_OWNER_BOOL__", "true" if is_admin_route else "false")
-  .replace("__ADMIN_BTN_HIDDEN__", "" if is_admin_route else "hidden")
-  .replace("__CUSTOM_DOMAIN__", f"{custom_dom} (ثبت دائم + SSL)" if custom_dom else "ثبت نشده (آی‌پی / تانل)")
-  .replace("__CUSTOM_DOMAIN_VAL__", custom_dom or detect_server_ip())
+  .replace("__SERVER_IP__", server_ip)
+  .replace("__IS_ADMIN_ROUTE_BOOL__", "true" if is_admin_route else "false")
+  .replace("__IS_AUTO_AUTH_BOOL__", "true" if is_auto_auth else "false")
+  .replace("__ADMIN_BTN_HIDDEN__", "" if (is_admin_route or is_auto_auth) else "hidden")
+  .replace("__MINI_NAV_BTN__", "" if (is_admin_route or is_auto_auth) else "hidden")
+  .replace("__LOGIN_CARD_HIDDEN__", "hidden" if is_auto_auth else "")
+  .replace("__DASH_CONTENT_HIDDEN__", "" if is_auto_auth else "hidden")
+  .replace("__CUSTOM_DOMAIN__", f"{custom_dom} (ثبت دائم + SSL)" if custom_dom else f"{server_ip} (آی‌پی سرور)")
+  .replace("__CUSTOM_DOMAIN_VAL__", custom_dom or server_ip)
   .replace("__TON__", TON_WALLET)
   .replace("__TRON__", TRON_WALLET)
   .replace("__GITHUB__", GITHUB_URL)
@@ -1904,6 +2205,8 @@ async def start_web_server(bot_instance: Bot):
  app.router.add_get("/miniapp", handle_page)
  app.router.add_get("/miniapp/", handle_page)
  app.router.add_get("/api/rates", api_rates)
+ app.router.add_post("/api/admin/login", api_admin_login)
+ app.router.add_post("/api/admin/credentials", api_admin_credentials)
  app.router.add_post("/api/admin/ssl", api_admin_ssl)
  app.router.add_post("/api/override", api_override)
  app.router.add_post("/api/support", api_support)
@@ -2087,10 +2390,6 @@ SSL_HELPER_EOF
 
 chmod +x /usr/local/bin/arz-ssl
 /usr/local/bin/arz-ssl "$TARGET_HOST" "" || true
-if [ -z "$INPUT_HOST" ]; then
-  rm -f "$INSTALL_DIR/custom_domain.txt"
-  sed -i 's|^CUSTOM_DOMAIN=.*|CUSTOM_DOMAIN=""|' "$INSTALL_DIR/.env" || true
-fi
 
 if ! command -v cloudflared >/dev/null 2>&1; then
   ARCH=$(uname -m)
@@ -2158,9 +2457,6 @@ for i in {1..20}; do
     TUNNEL_URL=$(grep -oE 'https://[a-zA-Z0-9]+-[a-zA-Z0-9-]+\.trycloudflare\.com' /opt/arzpulse/tunnel.log 2>/dev/null | grep -v 'api\.trycloudflare\.com' | tail -n 1 || true)
     if [ -n "$TUNNEL_URL" ]; then
       echo "$TUNNEL_URL" > /opt/arzpulse/tunnel_url.txt
-      if [ -z "$INPUT_HOST" ]; then
-        sed -i "s|^WEB_PANEL_URL=.*|WEB_PANEL_URL="$TUNNEL_URL"|" "$INSTALL_DIR/.env"
-      fi
       break
     fi
   fi
