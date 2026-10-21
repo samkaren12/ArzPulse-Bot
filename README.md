@@ -1,3 +1,4 @@
+<img width="2752" height="1536" alt="1000100830" src="https://github.com/user-attachments/assets/aec47b12-08ca-49c1-b69d-f7bf3b80623a" />
 # 🌐 ArzPulse Pro — Multi-Language Telegram Currency & Crypto Bot, Mini App & Web Panel
 
 ![Version](https://img.shields.io/badge/Version-3.8.0--Pro-2563eb?style=for-the-badge)
