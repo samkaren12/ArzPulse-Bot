@@ -2692,6 +2692,21 @@ show_menu() {
   read -rp "Enter choice [0-7]: " choice </dev/tty
 }
 
+
+spinner() {
+  local pid=\$1
+  local delay=0.1
+  local spinstr='|/-\\'
+  while kill -0 \$pid 2>/dev/null; do
+    local temp=\${spinstr#?}
+    printf " [%c]  " "\$spinstr"
+    local spinstr=\$temp\${spinstr%"\$temp"}
+    sleep \$delay
+    printf "\\b\\b\\b\\b\\b\\b"
+  done
+  printf "    \\b\\b\\b\\b"
+}
+
 issue_ssl() {
   echo -e "\\n\${BLUE}[SSL & Domain Manager] Enter your Domain, Subdomain, or Server IP:\${NC}"
   read -rp "Target (e.g. sub.yourdomain.com or 203.0.113.10): " TARGET_HOST </dev/tty
@@ -2706,7 +2721,7 @@ issue_ssl() {
     SSL_EMAIL=\$(echo "\$SSL_EMAIL" | tr -d '[:space:]')
   fi
   echo -e "\${YELLOW}⏳ Saving \$TARGET_HOST permanently & issuing SSL certificate on Port 443...\${NC}"
-  /usr/local/bin/arz-ssl "\$TARGET_HOST" "\$SSL_EMAIL"
+  /usr/local/bin/arz-ssl "\$TARGET_HOST" "\$SSL_EMAIL" &\n  spinner \$!
   systemctl restart arzpulse-bot || true
   echo -e "\${GREEN}✅ Domain/Subdomain (\$TARGET_HOST) is permanently saved and SSL is active!\${NC}"
   echo -e "\${CYAN}👑 Owner Web Admin (HTTPS): https://\$TARGET_HOST/admin?autologin=1\${NC}"
@@ -2733,13 +2748,13 @@ while true; do
   show_menu
   case "\$choice" in
     1) systemctl status arzpulse-bot nginx arzpulse-tunnel --no-pager || true ; read -rp "Press Enter..." </dev/tty ;;
-    2) "\$INSTALL_DIR/venv/bin/pip" install --upgrade aiogram aiohttp matplotlib && systemctl restart arzpulse-bot ; echo -e "\${GREEN}✅ Updated successfully!\${NC}" ; read -rp "Press Enter..." </dev/tty ;;
-    3) rm -f /opt/arzpulse/tunnel.log ; systemctl restart nginx arzpulse-tunnel arzpulse-bot ; echo -e "\${GREEN}✅ Services restarted (Saved Domain & SSL preserved)!\${NC}" ; read -rp "Press Enter..." </dev/tty ;;
-    4) systemctl stop arzpulse-bot arzpulse-tunnel ; echo -e "\${YELLOW}🛑 Services stopped.\${NC}" ; read -rp "Press Enter..." </dev/tty ;;
+    2) "\$INSTALL_DIR/venv/bin/pip" install --upgrade aiogram aiohttp matplotlib > /dev/null 2>&1 & spinner \$! && systemctl restart arzpulse-bot & spinner \$! ; echo -e "\${GREEN}✅ Updated successfully!\${NC}" ; read -rp "Press Enter..." </dev/tty ;;
+    3) rm -f /opt/arzpulse/tunnel.log ; systemctl restart nginx arzpulse-tunnel arzpulse-bot & spinner \$! ; echo -e "\${GREEN}✅ Services restarted (Saved Domain & SSL preserved)!\${NC}" ; read -rp "Press Enter..." </dev/tty ;;
+    4) systemctl stop arzpulse-bot arzpulse-tunnel & spinner \$! ; echo -e "\${YELLOW}🛑 Services stopped.\${NC}" ; read -rp "Press Enter..." </dev/tty ;;
     5) issue_ssl ; read -rp "Press Enter..." </dev/tty ;;
     6) change_credentials ; read -rp "Press Enter..." </dev/tty ;;
-    7) systemctl stop arzpulse-bot arzpulse-tunnel || true ; systemctl disable arzpulse-bot arzpulse-tunnel || true ; rm -rf "\$INSTALL_DIR" "\$CLI_PATH" /usr/local/bin/arz-ssl /etc/systemd/system/arzpulse-bot.service /etc/systemd/system/arzpulse-tunnel.service ; echo -e "\${RED}🗑️ Uninstalled completely.\${NC}" ; exit 0 ;;
-    0) exit 0 ;;
+    7) systemctl stop arzpulse-bot arzpulse-tunnel > /dev/null 2>&1 || true ; systemctl disable arzpulse-bot arzpulse-tunnel > /dev/null 2>&1 || true ; rm -rf "\$INSTALL_DIR" "\$CLI_PATH" /usr/local/bin/arz-ssl /etc/systemd/system/arzpulse-bot.service /etc/systemd/system/arzpulse-tunnel.service & spinner \$! ; echo -e "\${RED}🗑️ Uninstalled completely.\${NC}" ; break ;;
+    0) break ;;
     *) echo -e "\${RED}Invalid option!\${NC}" ; sleep 1 ;;
   esac
 done
