@@ -23,7 +23,7 @@ import {
   getAssetTomanPrice,
   ARZDIGITAL_USD_URL,
 } from '../utils/currencyEngine';
-import { LIVE_INSTALL_SCRIPT_URL } from '../utils/codeGenerators';
+import { LIVE_INSTALL_SCRIPT_URL, generateDirectZero404ServerCommand } from '../utils/codeGenerators';
 import { PnLChartCanvas } from './PnLChartCanvas';
 
 export interface BotMessage {
@@ -1138,18 +1138,16 @@ export const BotSimulatorView: React.FC<BotSimulatorViewProps> = ({
             <button
               type="button"
               onClick={() => {
-                import('../utils/codeGenerators').then(({ generateDirectZero404ServerCommand }) => {
-                  copyToClipboard(
-                    generateDirectZero404ServerCommand({
-                      adminUsername,
-                      adminPassword,
-                      githubUrl,
-                      tonWallet,
-                      tronWallet,
-                    }),
-                    'main-zero404-cmd'
-                  );
-                });
+                copyToClipboard(
+                  generateDirectZero404ServerCommand({
+                    adminUsername,
+                    adminPassword,
+                    githubUrl,
+                    tonWallet,
+                    tronWallet,
+                  }),
+                  'main-zero404-cmd'
+                );
               }}
               className="flex-1 py-2.5 px-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-sm"
             >
