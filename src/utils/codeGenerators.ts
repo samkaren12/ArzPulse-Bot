@@ -2261,7 +2261,7 @@ async def background_price_loop():
             await refresh_live_prices()
         except Exception:
             pass
-        await asyncio.sleep(45)
+        await asyncio.sleep(5)
 
 async def main():
     load_saved_users()

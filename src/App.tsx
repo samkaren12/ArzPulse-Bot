@@ -103,7 +103,7 @@ export default function App() {
     handleSyncArzDigital();
     const intervalId = setInterval(() => {
       handleSyncArzDigital();
-    }, 45000); // 45 seconds
+    }, 5000); // 5 seconds
 
     return () => clearInterval(intervalId);
   }, [handleSyncArzDigital]);
