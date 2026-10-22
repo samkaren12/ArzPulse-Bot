@@ -98,9 +98,14 @@ export default function App() {
     }
   }, []);
 
-  // Fetch live USD, Fiat & Crypto prices from ArzDigital on mount
+  // Fetch live USD, Fiat & Crypto prices from ArzDigital on mount and update periodically
   useEffect(() => {
     handleSyncArzDigital();
+    const intervalId = setInterval(() => {
+      handleSyncArzDigital();
+    }, 45000); // 45 seconds
+
+    return () => clearInterval(intervalId);
   }, [handleSyncArzDigital]);
 
   const handleAddTicket = (message: string) => {
